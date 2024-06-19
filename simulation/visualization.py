@@ -33,7 +33,7 @@ class Visualization:
         self.network.reset_paired_devices()
         self.network.update_device_positions()
         self.network.update_in_range_devices()
-        self.network.run_form_clusters()
+        self.network.run_dkmeans()
         self.network.run_gossip_protocol()
 
         self.draw_devices()
@@ -43,9 +43,14 @@ class Visualization:
         #self.batch = pyglet.graphics.Batch()  # Clear previous batch
         for device in self.network.devices:
             x, y = device.x * 8, device.y * 8
-            circle = shapes.Circle(x, y, 5, batch=self.batch, color=device.color)
+            if device.is_head:
+                circle = shapes.Triangle(x, y, x + 10, y, x + 5, y + 10, batch=self.batch, color=device.color)
+            else:
+                circle = shapes.Circle(x, y, 5, batch=self.batch, color=device.color)
+            
             self.circles.append(circle)
 
+
     def run(self):
-        pyglet.clock.schedule_interval(self.update, 1/10.0)
+        pyglet.clock.schedule_interval(self.update, 1/configuration.UPDATE_RATE)
         pyglet.app.run()

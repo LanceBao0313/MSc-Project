@@ -4,6 +4,7 @@ import paho.mqtt.client as mqtt
 import time
 import pickle
 import threading
+import configuration
 
 class Device:
     def __init__(self, id, x, y, comm_range, is_head=False, color=(50, 225, 30)):
@@ -42,7 +43,7 @@ class Device:
 
 
     def on_connect(self, client, userdata, flags, rc):
-        print("Connected with result code " + str(rc))
+        #print("Connected with result code " + str(rc))
         self.client.subscribe(self.topic_sub)
 
     def on_message(self, client, userdata, message):
@@ -52,7 +53,7 @@ class Device:
         message_data = payload.get("message_data")
 
         if command:
-            print(f"Device {self.id} received command: {command}")
+            #print(f"Device {self.id} received command: {command}")
             if command == "publish" and not self.publishing:
                 self.publishing = True
                 self.publish_thread = threading.Thread(target=self.publish_data)
@@ -63,7 +64,8 @@ class Device:
                     self.publish_thread.join()
                 print("Stopped publishing")
         elif message_data:
-            print(f"Device {self.id} received message from Device {sender_id}: {message_data}")
+            pass
+            #print(f"Device {self.id} received message from Device {sender_id}: {message_data}")
 
 
     def publish_data(self):
@@ -98,8 +100,8 @@ class Device:
         # Simulate slow and smooth movement
         if self.out_of_bounds():
             self.direction += np.pi
-        self.x += 0.1 * np.cos(self.direction)
-        self.y += 0.1 * np.sin(self.direction)
+        self.x += configuration.MOVE_SPEED * np.cos(self.direction)
+        self.y += configuration.MOVE_SPEED * np.sin(self.direction)
 
     def calculate_distance(self, device_a, device_b):
         return np.sqrt((device_a.x - device_b.x)**2 + (device_a.y - device_b.y)**2)
@@ -148,20 +150,22 @@ class Device:
                     x += device.x
                     y += device.y
                 # return x / number_of_devices, y / number_of_devices
-                center = np.array([x / number_of_devices, y / number_of_devices])
-                # find the closest device to the center
+                center = Device(-1, x / number_of_devices, y / number_of_devices, 0)
+                return center
                 
             
 
     def update_cluster_heads(self):
-        if self.is_head:
-            if len(self.cluster) > 0:
-                # find device closest to the center
-                center = self.calculate_cluster_center()
-                distances = [self.calculate_distance(center, device) for device in self.cluster]
-                closest_index = np.argmin(distances)
-                closest_device = self.cluster[closest_index]
+        if self.is_head and len(self.cluster) > 0:
+            # find device closest to the center
+            center = self.calculate_cluster_center()
+            distances = [self.calculate_distance(center, device) for device in self.cluster]
+            closest_index = np.argmin(distances)
+            closest_device = self.cluster[closest_index]
+            if closest_device.id != self.id and not closest_device.is_head:
+                #print(f'head {self.id} is giving head to {closest_device.id}')
                 closest_device.is_head = True
+                closest_device.color = self.color
                 self.is_head = False
                 closest_device.cluster = self.cluster
                 self.cluster = []

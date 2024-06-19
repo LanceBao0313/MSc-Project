@@ -21,6 +21,7 @@ class Network:
             x, y = random.uniform(0, 100), random.uniform(0, 100)
             rand = random.uniform(0, 1)
             if rand < head_prob:
+                print(f"Device {i} is a cluster head")
                 rand_color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
                 device = Device(i, x, y, comm_range, True, rand_color)
             else:
@@ -48,13 +49,14 @@ class Network:
         random.shuffle(self.devices)
         for device in self.devices:
             device.gossip()
-        time.sleep(1)  # Adjust the interval as needed
-        print("__________________________")
+        #time.sleep(1)  # Adjust the interval as needed
+        #print("__________________________")
 
-    def run_form_clusters(self):
-        for i in range(10):
+    def run_dkmeans(self):
+        for i in range(configuration.DKMEANS_ITERATIONS):
             for device in self.devices:
                 device.assign_clusters()
             
             for device in self.devices:
                 device.update_cluster_heads()
+        
