@@ -7,7 +7,7 @@ import threading
 import configuration
 
 class Device:
-    def __init__(self, id, x, y, comm_range, is_head=False, color=(50, 225, 30)):
+    def __init__(self, id, x, y, comm_range, is_head=False, color = configuration.DEVICE_DEFAULT_COLOUR):
         self.id = id
         self.x = x
         self.y = y
@@ -132,13 +132,36 @@ class Device:
         
         cluster_heads = [device for device in self.in_range_devices if device.is_head]
         if not cluster_heads:
-            return
-        distances = [self.calculate_distance(self, head) for head in cluster_heads]
-        closest_index = np.argmin(distances)
-        closest_head = cluster_heads[closest_index]
-        self.cluster_id = closest_head.id
-        closest_head.cluster.append(self)
-        self.color = closest_head.color
+            # If there are no cluster heads in range, become a cluster head if it is in a dense area
+            if len(self.in_range_devices) >= 5:
+                self.is_head = True
+                self.color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+            else:
+                # Find the nearest neighbor in comm range
+                distances = [self.calculate_distance(self, device) for device in self.in_range_devices]
+                closest_index = np.argmin(distances)
+                closest_device = self.in_range_devices[closest_index]
+                # Join the cluster of the closest device (one-hop clustering) 
+                if closest_device.cluster_id is not None:
+                    self.cluster_id = closest_device.cluster_id
+                    self.color = closest_device.color
+                    # Update the cluster of the cluster head
+                    for device in self.in_range_devices:
+                        if device.cluster_id == self.cluster_id:
+                            device.cluster.append(self)
+
+                # Become an orphan device
+                else:
+                    self.cluster_id = None
+                    self.color = configuration.DEVICE_DEFAULT_COLOUR
+                    self.cluster = []
+        else:
+            distances = [self.calculate_distance(self, head) for head in cluster_heads]
+            closest_index = np.argmin(distances)
+            closest_head = cluster_heads[closest_index]
+            self.cluster_id = closest_head.id
+            closest_head.cluster.append(self)
+            self.color = closest_head.color
 
     def calculate_cluster_center(self):
         if self.is_head:
