@@ -4,10 +4,9 @@ import pyglet
 import configuration
 
 def main():
-    num_devices = 50
-    comm_range = 10  # Communication range
+    num_devices = configuration.NUMBER_OF_DEVICES
     number_of_clusters = num_devices // 5
-    network = Network(num_devices, comm_range, number_of_clusters)
+    network = Network(num_devices, number_of_clusters)
     Visualization(network).run()
     
 if __name__ == "__main__":

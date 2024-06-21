@@ -8,11 +8,11 @@ class Visualization:
     def __init__(self, network):
         self.network = network
         self.window = pyglet.window.Window(configuration.WINDOW_SIZE, configuration.WINDOW_SIZE)
-        # Set the background colour
         pyglet.gl.glClearColor(*configuration.BACKGROUND_COLOUR_GL)
         self.window.clear()
         self.batch = pyglet.graphics.Batch()
         self.circles = []
+        self.counter = 0
 
         # To handle the on_draw event correctly
         @self.window.event
@@ -20,8 +20,6 @@ class Visualization:
             if configuration.GRAPHICS_ON:
                 self.window.clear()
                 self.batch.draw()
-                # Draw the window
-                # self.window.flip()
 
         # To handle key events for closing the window
         @self.window.event
@@ -30,13 +28,20 @@ class Visualization:
                 self.window.close()
 
     def update(self, dt):
+        # Update physical environment
         self.network.reset_paired_devices()
         self.network.update_device_positions()
         self.network.update_in_range_devices()
+        # DK-means
         self.network.run_dkmeans()
+        # Federated learning
+        #self.network.run_local_training()
+        
         self.network.run_gossip_protocol()
 
         self.draw_devices()
+        self.counter += 1
+        input("")
 
     def draw_devices(self):
         self.circles.clear()
