@@ -146,9 +146,7 @@ class Device:
                     self.cluster_id = closest_device.cluster_id
                     self.color = closest_device.color
                     # Update the cluster of the cluster head
-                    for device in self.in_range_devices:
-                        if device.cluster_id == self.cluster_id:
-                            device.cluster.append(self)
+                    
 
                 # Become an orphan device
                 else:
