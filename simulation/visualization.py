@@ -35,7 +35,7 @@ class Visualization:
         # DK-means
         self.network.run_dkmeans()
         # Federated learning
-        #self.network.run_local_training()
+        self.network.run_local_training()
         
         self.network.run_gossip_protocol()
 

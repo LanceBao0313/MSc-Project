@@ -7,10 +7,10 @@ import time
 random.seed(configuration.RANDOM_SEED)
 
 class Network:
-    def __init__(self, num_devices, num_clusters):
-        self.devices = self.initialize_devices(num_devices, num_clusters)
+    def __init__(self, num_devices, num_clusters, dataloaders):
+        self.devices = self.initialize_devices(num_devices, num_clusters, dataloaders)
 
-    def initialize_devices(self, num_devices, num_clusters):
+    def initialize_devices(self, num_devices, num_clusters, dataloaders):
         devices = []
         head_prob = num_clusters / num_devices
         for i in range(num_devices):
@@ -19,9 +19,9 @@ class Network:
             if rand < head_prob:
                 print(f"Device {i} is a cluster head")
                 rand_color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-                device = Device(i, x, y, True, rand_color)
+                device = Device(i, x, y, dataloaders[i], True, rand_color)
             else:
-                device = Device(i, x, y, False)
+                device = Device(i, x, y, dataloaders[i], False)
             device.start_client()
             devices.append(device)
         return devices
@@ -55,4 +55,8 @@ class Network:
             
             for device in self.devices:
                 device.update_cluster_heads()
+    
+    def run_local_training(self):
+        for device in self.devices:
+            device.local_training()
         

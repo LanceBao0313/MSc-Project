@@ -4,23 +4,29 @@ import paho.mqtt.client as mqtt
 import time
 import pickle
 import threading
-import configuration
-from scipy.stats import levy
+from configuration import PORT, DEVICE, MOVE_SPEED, COMM_RANGE, DEVICE_DEFAULT_COLOUR, MIN_CLUSTER_SIZE, NUM_OF_CLASSES
+from model import replace_fc_layer, train
+from mcunet.mcunet.model_zoo import build_model
+import torch.nn as nn
+import torch
+
 
 class Device:
-    def __init__(self, id, x, y, is_head=False, color = configuration.DEVICE_DEFAULT_COLOUR):
+    def __init__(self, id, x, y, dataloader, is_head=False, color = DEVICE_DEFAULT_COLOUR):
         self.id = id
         self.x = x
         self.y = y
-        self.model = self.initialize_model()
-        self.data = self.load_local_data()
+        model, resolution, description = build_model(net_id="mcunet-in3", pretrained=True)
+        self.model = replace_fc_layer(model, NUM_OF_CLASSES)
+        self.model.to(DEVICE)
+        self.dataloader = dataloader #self.load_local_data()
         self.cluster_id = None
         self.in_range_devices = []
         self.is_head = is_head
         self.cluster = []
 
         self.broker = "localhost"
-        self.port = configuration.PORT
+        self.port = PORT
         self.topic_pub = f"device_{self.id}/data"
         self.topic_sub = f"device_{self.id}/command"
         self.topic_comm = f"device_{self.id}/comm"
@@ -34,7 +40,6 @@ class Device:
 ###############################################################################################
 ################################# MQTT Client #################################################
 ###############################################################################################
-
     def start_client(self):
         self.client = mqtt.Client(client_id=str(self.id), protocol=mqtt.MQTTv311)
         self.client.on_connect = self.on_connect
@@ -87,17 +92,18 @@ class Device:
         publishing = False
         print("Stopped publishing")
 
-    def communicate(self, partner):
+    def communicate(self, partner, data):
         # Function for communication between devices
         #print(f"Device {self.id} communicating with Device {partner.id}")
         # Generate a random message 
         if self.paired or partner.paired:
             return
         
-        message = f"Hello Device {partner.id}, from Device {self.id}"
+        #message = f"Hello Device {partner.id}, from Device {self.id}"
+
         payload = pickle.dumps({
             "sender_id": self.id,
-            "message_data": message
+            "message_data": data, #self.model.classifier.linear.weight.data,
         })
         # Publish the message to the partner's communication topic
         self.client.publish(partner.topic_sub, payload)
@@ -107,17 +113,12 @@ class Device:
 ################################# Local Training ##############################################
 ###############################################################################################
 
-    def initialize_model(self):
-        # Dummy function for initializing a model
-        return None
-
-    def load_local_data(self):
-        # Dummy function for loading local data
-        return None
-
-    def train_model(self):
-        # Dummy function for training the local model
-        pass
+    def local_training(self):
+        # Function for local training
+        #print(f"Device {self.id} is training")
+        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
+        train(self.model, self.dataloader, criterion, optimizer, DEVICE)
     
 ###############################################################################################
 #################################### DK-means #################################################
@@ -130,10 +131,10 @@ class Device:
 
     def assign_clusters(self):
         if self.is_head:
-            if (len(self.in_range_devices) <= configuration.MIN_CLUSTER_SIZE) or (len(self.cluster) <= configuration.MIN_CLUSTER_SIZE):
+            if (len(self.in_range_devices) <= MIN_CLUSTER_SIZE) or (len(self.cluster) <= MIN_CLUSTER_SIZE):
                 self.is_head = False
                 self.cluster_id = None
-                self.color = configuration.DEVICE_DEFAULT_COLOUR
+                self.color = DEVICE_DEFAULT_COLOUR
                 self.cluster = []
             
             self.update_cluster_member()
@@ -142,11 +143,11 @@ class Device:
         cluster_heads = [device for device in self.in_range_devices if device.is_head]
         if not cluster_heads:
             self.cluster_id = None
-            self.color = configuration.DEVICE_DEFAULT_COLOUR
+            self.color = DEVICE_DEFAULT_COLOUR
             self.cluster = []
             # If there are no cluster heads in range, become a cluster head if it is in a dense area
             if len(self.in_range_devices) > 0:
-                if len(self.in_range_devices) > configuration.MIN_CLUSTER_SIZE:
+                if len(self.in_range_devices) > MIN_CLUSTER_SIZE:
                     self.is_head = True
                     self.color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
                 else:
@@ -224,7 +225,7 @@ class Device:
 
         if self.in_range_devices:
             partner = random.choice(self.in_range_devices)
-            self.communicate(partner)
+            self.communicate(partner, self.model.classifier.weight.data)
             self.paired = True
             partner.paired = True
 
@@ -244,12 +245,12 @@ class Device:
         if self.out_of_bounds():
             self.direction += np.pi
 
-        self.x += configuration.MOVE_SPEED * np.cos(self.direction)
-        self.y += configuration.MOVE_SPEED * np.sin(self.direction)
+        self.x += MOVE_SPEED * np.cos(self.direction)
+        self.y += MOVE_SPEED * np.sin(self.direction)
 
     def calculate_distance(self, device_a, device_b):
         return np.sqrt((device_a.x - device_b.x)**2 + (device_a.y - device_b.y)**2)
 
     def in_range(self, other_device):
         distance = self.calculate_distance(self, other_device)
-        return distance <= configuration.COMM_RANGE
+        return distance <= COMM_RANGE
