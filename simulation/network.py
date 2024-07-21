@@ -3,6 +3,8 @@ import random
 import configuration
 import threading
 import time
+import torch.multiprocessing as mp
+import torch
 
 random.seed(configuration.RANDOM_SEED)
 
@@ -57,6 +59,15 @@ class Network:
                 device.update_cluster_heads()
     
     def run_local_training(self):
+        counter = 0
         for device in self.devices:
             device.local_training()
+            print(f"Device [{counter}|{len(self.devices)}] trained")
+            counter += 1
+    def train_device(self, device):
+        device.local_training()
+
+    def parallel_training(self):
+        with mp.Pool(processes=torch.cuda.device_count()) as pool:  # Use the number of GPUs available
+            pool.map(self.train_device, self.devices)
         

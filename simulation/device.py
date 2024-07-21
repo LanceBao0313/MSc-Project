@@ -5,7 +5,7 @@ import time
 import pickle
 import threading
 from configuration import PORT, DEVICE, MOVE_SPEED, COMM_RANGE, DEVICE_DEFAULT_COLOUR, MIN_CLUSTER_SIZE, NUM_OF_CLASSES
-from model import replace_fc_layer, train
+from model import replace_fc_layer, train, load_checkpoint, reset_classifier_weights, extract_classifier_weights, set_weights, fedAvg
 from mcunet.mcunet.model_zoo import build_model
 import torch.nn as nn
 import torch
@@ -16,10 +16,16 @@ class Device:
         self.id = id
         self.x = x
         self.y = y
-        model, resolution, description = build_model(net_id="mcunet-in3", pretrained=True)
-        self.model = replace_fc_layer(model, NUM_OF_CLASSES)
+
+        # model, resolution, description = build_model(net_id="mcunet-in3", pretrained=True)
+        # self.model = replace_fc_layer(model, NUM_OF_CLASSES)
+        self.model = load_checkpoint("./checkpoints/baseline_checkpoint_80.pth")
+        reset_classifier_weights(self.model)
         self.model.to(DEVICE)
+        self.checkpoint_path = f"./checkpoints/device_{self.id}_checkpoint.pth"
+
         self.dataloader = dataloader #self.load_local_data()
+        self.num_samples = len(dataloader.dataset)
         self.cluster_id = None
         self.in_range_devices = []
         self.is_head = is_head
@@ -33,13 +39,14 @@ class Device:
 
         self.paired = False
         self.publishing = False
-        self.publish_thread = None  
+        # self.publish_thread = None  
         self.direction = random.uniform(0, 2*np.pi) 
         self.color = color
 
 ###############################################################################################
 ################################# MQTT Client #################################################
 ###############################################################################################
+
     def start_client(self):
         self.client = mqtt.Client(client_id=str(self.id), protocol=mqtt.MQTTv311)
         self.client.on_connect = self.on_connect
@@ -48,33 +55,39 @@ class Device:
         self.client.connect(self.broker, self.port, 60)
         self.client.loop_start()
 
-        self.publish_thread = threading.Thread(target=self.publish_data)
-        self.publish_thread.start()
+        # self.publish_thread = threading.Thread(target=self.publish_data)
+        # self.publish_thread.start()
 
     def on_connect(self, client, userdata, flags, rc):
         #print("Connected with result code " + str(rc))
         self.client.subscribe(self.topic_sub)
 
     def on_message(self, client, userdata, message):
+
         payload = pickle.loads(message.payload)
-        command = payload.get("command")
         sender_id = payload.get("sender_id")
+        sender_topic_sub = payload.get("sender_topic_sub")
+        command = payload.get("command")
         message_data = payload.get("message_data")
 
-        if command:
-            #print(f"Device {self.id} received command: {command}")
-            if command == "publish" and not self.publishing:
-                self.publishing = True
-                self.publish_thread = threading.Thread(target=self.publish_data)
-                self.publish_thread.start()
-            elif command == "subscribe" and self.publishing:
-                self.publishing = False
-                if self.publish_thread is not None:
-                    self.publish_thread.join()
-                print("Stopped publishing")
-        elif message_data:
-            pass
-            #print(f"Device {self.id} received message from Device {sender_id}: {message_data}")
+        if message_data is not None:
+            if command == "reply":
+                new_weights = fedAvg(extract_classifier_weights(self.model), message_data)
+                set_weights(self.model, new_weights)
+                # Reply to the sender
+                payload = pickle.dumps({
+                    "sender_id": self.id,
+                    "sender_topic_sub": self.topic_sub,
+                    "command": "None",
+                    "message_data": new_weights,
+                })
+                self.client.publish(sender_topic_sub, payload)
+            else:
+                set_weights(self.model, message_data)
+        
+        # print(f"Device {self.id} received message from Device {sender_id}")
+
+        
 
     def publish_data(self):
         while self.publishing:
@@ -103,6 +116,8 @@ class Device:
 
         payload = pickle.dumps({
             "sender_id": self.id,
+            "sender_topic_sub": self.topic_sub,
+            "command": "reply",
             "message_data": data, #self.model.classifier.linear.weight.data,
         })
         # Publish the message to the partner's communication topic
@@ -117,8 +132,8 @@ class Device:
         # Function for local training
         #print(f"Device {self.id} is training")
         criterion = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
-        train(self.model, self.dataloader, criterion, optimizer, DEVICE)
+        optimizer = torch.optim.Adam(self.model.classifier.parameters(), lr=0.005)
+        train(self.model, self.dataloader, criterion, optimizer, self.checkpoint_path)
     
 ###############################################################################################
 #################################### DK-means #################################################
@@ -225,7 +240,8 @@ class Device:
 
         if self.in_range_devices:
             partner = random.choice(self.in_range_devices)
-            self.communicate(partner, self.model.classifier.weight.data)
+            weights = extract_classifier_weights(self.model)
+            self.communicate(partner, weights)
             self.paired = True
             partner.paired = True
 
@@ -254,3 +270,4 @@ class Device:
     def in_range(self, other_device):
         distance = self.calculate_distance(self, other_device)
         return distance <= COMM_RANGE
+    

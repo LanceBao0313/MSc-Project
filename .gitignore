@@ -1,3 +1,4 @@
 Board/demo/flower_photos.tgz
 Board/demo/flower_photos/
 simulation/dataset/cifar-10-python.tar.gz
+simulation/checkpoints/

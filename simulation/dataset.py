@@ -5,21 +5,25 @@ from torch.utils.data import DataLoader, Dataset, Subset
 import numpy as np
 import random
 from collections import defaultdict
+from configuration import BATCH_SIZE, NUMBER_OF_DEVICES, NUM_OF_CLASSES, NON_IID_ALPHA, RANDOM_SEED
+from typing import List, Tuple
 
-class CIFAR10Subset(Dataset):
-    def __init__(self, data, targets, transform=None):
-        self.data = data
-        self.targets = targets
-        self.transform = transform
+# class CIFAR10Subset(Dataset):
+#     def __init__(self, data, targets, transform=None):
+#         self.data = data
+#         self.targets = targets
+#         self.transform = transform
 
-    def __len__(self):
-        return len(self.data)
+#     def __len__(self):
+#         return len(self.data)
 
-    def __getitem__(self, idx):
-        img, target = self.data[idx], self.targets[idx]
-        if self.transform:
-            img = self.transform(img)
-        return img, target
+#     def __getitem__(self, idx):
+#         img, target = self.data[idx], self.targets[idx]
+#         if self.transform:
+#             img = self.transform(img)
+#         return img, target
+random.seed(RANDOM_SEED)
+np.random.seed(RANDOM_SEED)
 
 def split_non_iid(dataset, num_clients, num_classes_per_client):
     # Get the indices of each class
@@ -45,7 +49,7 @@ def split_non_iid(dataset, num_clients, num_classes_per_client):
     subsets = [Subset(dataset, indices) for indices in client_indices]
     return subsets
 
-def get_federated_dataloaders(root, num_clients, num_classes_per_client, batch_size=32, transform=None):
+def get_federated_dataloaders(root, num_clients, num_classes_per_client, batch_size=64, transform=None):
     # Transformations
     if transform is None:
         transform = transforms.Compose([
@@ -63,3 +67,132 @@ def get_federated_dataloaders(root, num_clients, num_classes_per_client, batch_s
     dataloaders = [DataLoader(subset, batch_size=batch_size, shuffle=True) for subset in subsets]
     
     return dataloaders
+
+def get_CIFAR10_dataloader(root, train=True):
+    # Transformations
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
+
+    # Load CIFAR-10 dataset
+    cifar10 = CIFAR10(root=root, train=train, download=False, transform=transform)
+    
+    # Create DataLoader
+    dataloader = DataLoader(cifar10, batch_size=BATCH_SIZE, shuffle=True)
+    
+    return dataloader
+
+# def get_nonIID_dataloader(root, train=True, batch_size=BATCH_SIZE, transform=None):
+#     if transform is None:
+#         transform = transforms.Compose([
+#             transforms.ToTensor(),
+#             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+#         ])
+
+#     # Load CIFAR-10 dataset
+#     cifar10 = CIFAR10(root=root, train=train, download=False, transform=transform)
+    
+#     num_clients = NUMBER_OF_DEVICES
+#     num_classes = NUM_OF_CLASSES
+
+#     # Sample from Dirichlet distribution
+#     proportions = np.random.dirichlet(NON_IID_ALPHA * np.ones(num_clients), num_classes)
+
+#     class_indices = defaultdict(list)
+#     for idx, (_, label) in enumerate(cifar10):
+#         class_indices[label].append(idx)
+
+#     # Allocate indices to each client
+#     client_indices = defaultdict(list)
+#     for class_idx in range(num_classes):
+#         class_proportion = proportions[class_idx]
+#         class_indices[class_idx] = np.array(class_indices[class_idx])
+#         np.random.shuffle(class_indices[class_idx])
+#         class_size = len(class_indices[class_idx])
+#         split_points = (np.cumsum(class_proportion) * class_size).astype(int)[:-1]
+#         split_indices = np.split(class_indices[class_idx], split_points)
+#         for client_id, indices in enumerate(split_indices):
+#             client_indices[client_id].extend(indices)
+
+#     # Convert lists to torch tensor
+#     client_datasets = {}
+#     for client_id, indices in client_indices.items():
+#         client_datasets[client_id] = torch.utils.data.Subset(cifar10, indices)
+
+#     # Create data loaders for each client
+#     client_dataloaders = []
+#     for client_id, dataset in client_datasets.items():
+#         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+#         client_dataloaders.append(dataloader)
+    
+#     return client_dataloaders
+
+def get_nonIID_dataloader(root, train=True, seed=42):
+    """Partition according to the Dirichlet distribution.
+
+    Parameters
+    ----------
+    num_clients : int
+        The number of clients that hold a part of the data
+    alpha: float
+        Parameter of the Dirichlet distribution
+    batch_size: int
+        Batch size for the data loaders
+    seed : int, optional
+        Used to set a fix seed to replicate experiments, by default 42
+    dataset_name : str
+        Name of the dataset to be used
+
+    Returns
+    -------
+    Tuple[List[DataLoader], DataLoader]
+        The list of data loaders for each client, the test data loader.
+    """
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
+
+    # Load CIFAR-10 dataset
+    cifar10 = CIFAR10(root=root, train=train, download=False, transform=transform)
+
+    min_required_samples_per_client = 10
+    min_samples = 0
+    prng = np.random.default_rng(seed)
+
+    # get the targets
+    tmp_t = cifar10.targets
+    if isinstance(tmp_t, list):
+        tmp_t = np.array(tmp_t)
+    if isinstance(tmp_t, torch.Tensor):
+        tmp_t = tmp_t.numpy()
+    num_classes = len(set(tmp_t))
+    total_samples = len(tmp_t)
+    while min_samples < min_required_samples_per_client:
+        idx_clients: List[List[int]] = [[] for _ in range(NUMBER_OF_DEVICES)]
+        for k in range(num_classes):
+            idx_k = np.where(tmp_t == k)[0]
+            prng.shuffle(idx_k)
+            proportions = prng.dirichlet(np.repeat(NON_IID_ALPHA, NUMBER_OF_DEVICES))
+            proportions = np.array(
+                [
+                    p * (len(idx_j) < total_samples / NUMBER_OF_DEVICES)
+                    for p, idx_j in zip(proportions, idx_clients)
+                ]
+            )
+            proportions = proportions / proportions.sum()
+            proportions = (np.cumsum(proportions) * len(idx_k)).astype(int)[:-1]
+            idx_k_split = np.split(idx_k, proportions)
+            idx_clients = [
+                idx_j + idx.tolist() for idx_j, idx in zip(idx_clients, idx_k_split)
+            ]
+            min_samples = min([len(idx_j) for idx_j in idx_clients])
+
+    trainsets_per_client = [Subset(cifar10, idxs) for idxs in idx_clients]
+    for i, trainset in enumerate(trainsets_per_client):
+        print(f"Client {i}: {len(trainset)} samples")
+    # Create data loaders for each client
+    client_dataloaders = [DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True) for dataset in trainsets_per_client]
+
+    return client_dataloaders
