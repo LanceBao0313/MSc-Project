@@ -5,7 +5,7 @@ import time
 import pickle
 import threading
 from configuration import PORT, DEVICE, MOVE_SPEED, COMM_RANGE, DEVICE_DEFAULT_COLOUR, MIN_CLUSTER_SIZE, NUM_OF_CLASSES
-from model import replace_fc_layer, train, load_checkpoint, reset_classifier_weights, extract_classifier_weights, set_weights, fedAvg
+from model import replace_fc_layer, train, load_checkpoint, reset_classifier_weights, extract_classifier_weights, set_weights, running_fedAvg
 from mcunet.mcunet.model_zoo import build_model
 import torch.nn as nn
 import torch
@@ -17,31 +17,33 @@ class Device:
         self.x = x
         self.y = y
 
-        # model, resolution, description = build_model(net_id="mcunet-in3", pretrained=True)
-        # self.model = replace_fc_layer(model, NUM_OF_CLASSES)
-        self.model = load_checkpoint("./checkpoints/baseline_checkpoint_80.pth")
-        reset_classifier_weights(self.model)
-        self.model.to(DEVICE)
-        self.checkpoint_path = f"./checkpoints/device_{self.id}_checkpoint.pth"
+        if self.id != -1:
+            # model, resolution, description = build_model(net_id="mcunet-in3", pretrained=True)
+            # self.model = replace_fc_layer(model, NUM_OF_CLASSES)
+            self.model = load_checkpoint("./checkpoints/baseline_checkpoint_2.pth")
+            reset_classifier_weights(self.model)
+            self.model.to(DEVICE)
+            self.checkpoint_path = f"./checkpoints/device_{self.id}_checkpoint.pth"
 
-        self.dataloader = dataloader #self.load_local_data()
-        self.num_samples = len(dataloader.dataset)
-        self.cluster_id = None
-        self.in_range_devices = []
-        self.is_head = is_head
-        self.cluster = []
+            self.dataloader = dataloader
+            self.num_samples = len(dataloader.dataset)
+            self.cluster_id = None
+            self.in_range_devices = []
+            self.is_head = is_head
+            self.cluster = []
 
-        self.broker = "localhost"
-        self.port = PORT
-        self.topic_pub = f"device_{self.id}/data"
-        self.topic_sub = f"device_{self.id}/command"
-        self.topic_comm = f"device_{self.id}/comm"
+            self.broker = "localhost"
+            self.port = PORT
+            self.topic_pub = f"device_{self.id}/data"
+            self.topic_sub = f"device_{self.id}/command"
+            self.topic_comm = f"device_{self.id}/comm"
 
-        self.paired = False
-        self.publishing = False
-        # self.publish_thread = None  
-        self.direction = random.uniform(0, 2*np.pi) 
-        self.color = color
+            self.paired = False
+            self.publishing = False
+            # self.publish_thread = None  
+            self.direction = random.uniform(0, 2*np.pi) 
+            self.color = color
+            self.gossip_counter = 1
 
 ###############################################################################################
 ################################# MQTT Client #################################################
@@ -69,20 +71,25 @@ class Device:
         sender_topic_sub = payload.get("sender_topic_sub")
         command = payload.get("command")
         message_data = payload.get("message_data")
+        gossip_counter = payload.get("gossip_counter")
 
         if message_data is not None:
             if command == "reply":
-                new_weights = fedAvg(extract_classifier_weights(self.model), message_data)
-                set_weights(self.model, new_weights)
+                print(f"sender: {sender_id}, reci: {self.id}")
+                running_avg_weight = running_fedAvg(extract_classifier_weights(self.model), message_data, self.gossip_counter, gossip_counter)
+                set_weights(self.model, running_avg_weight)
+                self.gossip_counter += gossip_counter # use the total counter of two devices
                 # Reply to the sender
                 payload = pickle.dumps({
                     "sender_id": self.id,
                     "sender_topic_sub": self.topic_sub,
                     "command": "None",
-                    "message_data": new_weights,
+                    "message_data": running_avg_weight,
+                    "gossip_counter": self.gossip_counter,
                 })
                 self.client.publish(sender_topic_sub, payload)
             else:
+                self.gossip_counter = gossip_counter
                 set_weights(self.model, message_data)
         
         # print(f"Device {self.id} received message from Device {sender_id}")
@@ -119,6 +126,7 @@ class Device:
             "sender_topic_sub": self.topic_sub,
             "command": "reply",
             "message_data": data, #self.model.classifier.linear.weight.data,
+            "gossip_counter": self.gossip_counter,
         })
         # Publish the message to the partner's communication topic
         self.client.publish(partner.topic_sub, payload)
@@ -230,7 +238,21 @@ class Device:
                 self.is_head = False
                 closest_device.cluster = self.cluster
 
-    def gossip(self):
+    def inner_gossip(self):
+        if self.paired:
+            return
+
+        available_devices = [device for device in self.in_range_devices if (not device.paired) and
+                              (device.cluster_id == self.cluster_id)]
+
+        if available_devices:
+            partner = random.choice(available_devices)
+            weights = extract_classifier_weights(self.model)
+            self.communicate(partner, weights)
+            self.paired = True
+            partner.paired = True
+
+    def inter_gossip(self):
         if self.paired:
             return
 
@@ -244,7 +266,6 @@ class Device:
             self.communicate(partner, weights)
             self.paired = True
             partner.paired = True
-
 
 ###############################################################################################
 ######################################## Util #################################################

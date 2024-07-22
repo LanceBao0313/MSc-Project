@@ -3,6 +3,7 @@ import torch
 from configuration import NUM_EPOCHS, NUM_OF_CLASSES, DEVICE
 from mcunet.mcunet.model_zoo import build_model
 import os
+import numpy as np
 
 def train(model, train_loader, criterion, optimizer, checkpoint_path):
 	# model, optimizer = load_checkpoint(checkpoint_path)
@@ -70,43 +71,49 @@ def load_checkpoint(filepath):
 		# optimizer.load_state_dict(checkpoint['optimizer_state_dict'])	
 	return model#, optimizer
 
-def fedAvg(weight_list, sample_list):
-    """Compute the weighted average of weights according to the number of samples.
+# def fedAvg(weight_list, sample_list):
+#     """Compute the weighted average of weights according to the number of samples.
 
-    Parameters
-    ----------
-    weight_list : List[List[torch.Tensor]]
-        List of weights from different clients
-    sample_list : List[int]
-        List of the number of samples corresponding to each client's weights
+#     Parameters
+#     ----------
+#     weight_list : List[List[torch.Tensor]]
+#         List of weights from different clients
+#     sample_list : List[int]
+#         List of the number of samples corresponding to each client's weights
 
-    Returns
-    -------
-    List[torch.Tensor]
-        The weighted average of the weights
-    """
-    # Ensure inputs are valid
-    assert len(weight_list) == len(sample_list), "The length of weight_list and sample_list must be equal"
+#     Returns
+#     -------
+#     List[torch.Tensor]
+#         The weighted average of the weights
+#     """
+#     # Ensure inputs are valid
+#     assert len(weight_list) == len(sample_list), "The length of weight_list and sample_list must be equal"
     
-    # Total number of samples
-    total_samples = sum(sample_list)
+#     # Total number of samples
+#     total_samples = sum(sample_list)
     
-    # Initialize the average weights with zeros
-    avg_weights = [torch.zeros_like(w) for w in weight_list[0]]
+#     # Initialize the average weights with zeros
+#     avg_weights = [torch.zeros_like(w) for w in weight_list[0]]
     
-    # Calculate the weighted average
-    for weights, samples in zip(weight_list, sample_list):
-        for i, w in enumerate(weights):
-            avg_weights[i] += w * (samples / total_samples)
+#     # Calculate the weighted average
+#     for weights, samples in zip(weight_list, sample_list):
+#         for i, w in enumerate(weights):
+#             avg_weights[i] += w * (samples / total_samples)
     
-    return avg_weights
-
-# def fedAvg(weights1, weights2):
-#     avg_weights = []
-#     for w1, w2 in zip(weights1, weights2):
-#         avg_weight = (w1 + w2) / 2
-#         avg_weights.append(avg_weight)
 #     return avg_weights
+
+def running_fedAvg(weight_1, weight_2, counter_1, counter_2):
+    # combined_average = (running_avg_A * count_A + running_avg_B * count_B) / (count_A + count_B)
+    avg_weights = []
+    for w1, w2 in zip(weight_1, weight_2):
+        if not isinstance(w1, torch.Tensor):
+            w1 = torch.tensor(w1, dtype=torch.float32)
+        if not isinstance(w2, torch.Tensor):
+            w2 = torch.tensor(w2, dtype=torch.float32)
+            
+        avg_weight = (w1 * counter_1 + w2 * counter_2) / (counter_1 + counter_2)
+        avg_weights.append(avg_weight)
+    return avg_weights
 
 
 def reset_classifier_weights(model):

@@ -16,6 +16,7 @@ class Visualization:
         self.window.clear()
         self.batch = pyglet.graphics.Batch()
         self.circles = []
+        self.labels = []
         self.start_time = time.time()
         # self.counter = 0
 
@@ -36,7 +37,6 @@ class Visualization:
                 self.window.close()
 
     def update(self, dt):
-        self.draw_devices()
         # Update physical environment
         self.network.reset_paired_devices()
         self.network.update_device_positions()
@@ -46,31 +46,54 @@ class Visualization:
         # Federated learning
         self.network.run_local_training()
         
-        print("————————————Running gossip protocol—————————————")
-        
-        for _ in range(configuration.GOSSIP_ITERATIONS):
+        self.network.reset_gossip_counters()
+
+        # Inner-cluster communication
+        for _ in range(configuration.INNER_GOSSIP_ITERATIONS):
+            print(f"Running Inner-cluster protocol: {_ + 1}")
             self.network.reset_paired_devices()
-            self.network.run_gossip_protocol()
+            self.network.run_inner_gossip_comm()
+        
+        # Inter-cluster communication
+        # for _ in range(configuration.INTER_GOSSIP_ITERATIONS):
+        #     print(f"Running inter-cluster protocol: {_ + 1}")
+        #     self.network.reset_paired_devices()
+        #     self.network.run_inter_gossip_comm()
+
+        
 
         # eval every 10 minutes
         if time.time() - self.start_time > 600:
             run_evaluation()
             self.start_time = time.time()
 
-        
+        self.draw_devices()
+
+        # i = input("Press Enter to continue...")
         # self.counter += 1
 
     def draw_devices(self):
         self.circles.clear()
+        self.labels.clear()
         #self.batch = pyglet.graphics.Batch()  # Clear previous batch
         for device in self.network.devices:
             x, y = device.x * 8, device.y * 8
             if device.is_head:
-                circle = shapes.Triangle(x, y, x + 10, y, x + 5, y + 10, batch=self.batch, color=device.color)
+                circle = shapes.Triangle(x, y+10, x-8, y-6, x+8, y-6, batch=self.batch, color=device.color)
             else:
-                circle = shapes.Circle(x, y, 5, batch=self.batch, color=device.color)
+                circle = shapes.Circle(x, y, 8, batch=self.batch, color=device.color)
             
-            self.circles.append(circle)
+            self.circles.append(circle)            
+        
+            label = pyglet.text.Label(str(device.id),
+                                        font_size=13,
+                                        x=x,
+                                        y=y,
+                                        anchor_x='center',
+                                        anchor_y='center',
+                                        batch=self.batch,
+                                        color=(255, 255, 255, 255))
+            self.labels.append(label)
 
     def run(self):
         start_time = time.time()

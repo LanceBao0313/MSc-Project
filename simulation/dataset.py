@@ -128,7 +128,7 @@ def get_CIFAR10_dataloader(root, train=True):
     
 #     return client_dataloaders
 
-def get_nonIID_dataloader(root, train=True, seed=42):
+def get_nonIID_dataloader(root, train=True):
     """Partition according to the Dirichlet distribution.
 
     Parameters
@@ -159,7 +159,7 @@ def get_nonIID_dataloader(root, train=True, seed=42):
 
     min_required_samples_per_client = 10
     min_samples = 0
-    prng = np.random.default_rng(seed)
+    prng = np.random.default_rng(RANDOM_SEED)
 
     # get the targets
     tmp_t = cifar10.targets
@@ -190,9 +190,8 @@ def get_nonIID_dataloader(root, train=True, seed=42):
             min_samples = min([len(idx_j) for idx_j in idx_clients])
 
     trainsets_per_client = [Subset(cifar10, idxs) for idxs in idx_clients]
-    for i, trainset in enumerate(trainsets_per_client):
-        print(f"Client {i}: {len(trainset)} samples")
+   
     # Create data loaders for each client
-    client_dataloaders = [DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True) for dataset in trainsets_per_client]
+    client_dataloaders = [DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True) for dataset in trainsets_per_client]
 
     return client_dataloaders

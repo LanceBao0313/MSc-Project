@@ -42,13 +42,24 @@ class Network:
         for device in self.devices:
             device.paired = False
 
-    def run_gossip_protocol(self):
+    def run_inner_gossip_comm(self):
         # shaffle the devices to avoid bias
         random.shuffle(self.devices)
         for device in self.devices:
-            device.gossip()
+            device.inner_gossip()
         #time.sleep(1)  # Adjust the interval as needed
         #print("__________________________")
+    
+    def run_inter_gossip_comm(self):
+        for device in self.devices:
+            device.inter_gossip()
+        #time.sleep(1)  # Adjust the interval as needed
+        #print("__________________________")
+    
+    def reset_gossip_counters(self):
+        for device in self.devices:
+            device.gossip_counter = 1
+        
 
     def run_dkmeans(self):
         for i in range(configuration.DKMEANS_ITERATIONS):
@@ -59,7 +70,7 @@ class Network:
                 device.update_cluster_heads()
     
     def run_local_training(self):
-        counter = 0
+        counter = 1
         for device in self.devices:
             device.local_training()
             print(f"Device [{counter}|{len(self.devices)}] trained")
