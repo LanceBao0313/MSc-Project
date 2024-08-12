@@ -25,48 +25,48 @@ from typing import List, Tuple
 random.seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
 
-def split_non_iid(dataset, num_clients, num_classes_per_client):
-    # Get the indices of each class
-    class_indices = defaultdict(list)
-    for idx, target in enumerate(dataset.targets):
-        class_indices[target].append(idx)
+# def split_non_iid(dataset, num_clients, num_classes_per_client):
+#     # Get the indices of each class
+#     class_indices = defaultdict(list)
+#     for idx, target in enumerate(dataset.targets):
+#         class_indices[target].append(idx)
     
-    # Shuffle the indices within each class
-    for indices in class_indices.values():
-        random.shuffle(indices)
+#     # Shuffle the indices within each class
+#     for indices in class_indices.values():
+#         random.shuffle(indices)
     
-    # Allocate indices to clients
-    client_indices = [[] for _ in range(num_clients)]
+#     # Allocate indices to clients
+#     client_indices = [[] for _ in range(num_clients)]
     
-    for client_id in range(num_clients):
-        selected_classes = random.sample(class_indices.keys(), num_classes_per_client)
-        for cls in selected_classes:
-            num_samples = len(class_indices[cls]) // num_clients
-            client_indices[client_id].extend(class_indices[cls][:num_samples])
-            class_indices[cls] = class_indices[cls][num_samples:]
+#     for client_id in range(num_clients):
+#         selected_classes = random.sample(class_indices.keys(), num_classes_per_client)
+#         for cls in selected_classes:
+#             num_samples = len(class_indices[cls]) // num_clients
+#             client_indices[client_id].extend(class_indices[cls][:num_samples])
+#             class_indices[cls] = class_indices[cls][num_samples:]
     
-    # Create a subset dataset for each client
-    subsets = [Subset(dataset, indices) for indices in client_indices]
-    return subsets
+#     # Create a subset dataset for each client
+#     subsets = [Subset(dataset, indices) for indices in client_indices]
+#     return subsets
 
-def get_federated_dataloaders(root, num_clients, num_classes_per_client, batch_size=64, transform=None):
-    # Transformations
-    if transform is None:
-        transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-        ])
+# def get_federated_dataloaders(root, num_clients, num_classes_per_client, batch_size=64, transform=None):
+#     # Transformations
+#     if transform is None:
+#         transform = transforms.Compose([
+#             transforms.ToTensor(),
+#             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+#         ])
 
-    # Load CIFAR-10 dataset
-    cifar10_train = CIFAR10(root=root, train=True, download=False, transform=transform)
+#     # Load CIFAR-10 dataset
+#     cifar10_train = CIFAR10(root=root, train=True, download=False, transform=transform)
     
-    # Split into non-IID subsets
-    subsets = split_non_iid(cifar10_train, num_clients, num_classes_per_client)
+#     # Split into non-IID subsets
+#     subsets = split_non_iid(cifar10_train, num_clients, num_classes_per_client)
     
-    # Create DataLoaders
-    dataloaders = [DataLoader(subset, batch_size=batch_size, shuffle=True) for subset in subsets]
+#     # Create DataLoaders
+#     dataloaders = [DataLoader(subset, batch_size=batch_size, shuffle=True) for subset in subsets]
     
-    return dataloaders
+#     return dataloaders
 
 def get_CIFAR10_dataloader(root, train=True):
     # Transformations
@@ -83,50 +83,6 @@ def get_CIFAR10_dataloader(root, train=True):
     
     return dataloader
 
-# def get_nonIID_dataloader(root, train=True, batch_size=BATCH_SIZE, transform=None):
-#     if transform is None:
-#         transform = transforms.Compose([
-#             transforms.ToTensor(),
-#             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-#         ])
-
-#     # Load CIFAR-10 dataset
-#     cifar10 = CIFAR10(root=root, train=train, download=False, transform=transform)
-    
-#     num_clients = NUMBER_OF_DEVICES
-#     num_classes = NUM_OF_CLASSES
-
-#     # Sample from Dirichlet distribution
-#     proportions = np.random.dirichlet(NON_IID_ALPHA * np.ones(num_clients), num_classes)
-
-#     class_indices = defaultdict(list)
-#     for idx, (_, label) in enumerate(cifar10):
-#         class_indices[label].append(idx)
-
-#     # Allocate indices to each client
-#     client_indices = defaultdict(list)
-#     for class_idx in range(num_classes):
-#         class_proportion = proportions[class_idx]
-#         class_indices[class_idx] = np.array(class_indices[class_idx])
-#         np.random.shuffle(class_indices[class_idx])
-#         class_size = len(class_indices[class_idx])
-#         split_points = (np.cumsum(class_proportion) * class_size).astype(int)[:-1]
-#         split_indices = np.split(class_indices[class_idx], split_points)
-#         for client_id, indices in enumerate(split_indices):
-#             client_indices[client_id].extend(indices)
-
-#     # Convert lists to torch tensor
-#     client_datasets = {}
-#     for client_id, indices in client_indices.items():
-#         client_datasets[client_id] = torch.utils.data.Subset(cifar10, indices)
-
-#     # Create data loaders for each client
-#     client_dataloaders = []
-#     for client_id, dataset in client_datasets.items():
-#         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-#         client_dataloaders.append(dataloader)
-    
-#     return client_dataloaders
 
 def get_nonIID_dataloader(root, train=True):
     """Partition according to the Dirichlet distribution.

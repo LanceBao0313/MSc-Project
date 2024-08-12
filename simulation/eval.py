@@ -6,7 +6,7 @@ from torchvision import datasets, transforms
 from model import load_checkpoint
 from dataset import CIFAR10
 from configuration import DATA_PATH, DEVICE, BATCH_SIZE
-
+import random
 # Function to evaluate a model on the test dataset
 def evaluate_model(model, test_loader, device):
     model.to(device)
@@ -24,11 +24,16 @@ def evaluate_model(model, test_loader, device):
     return accuracy, f1_score
 
 # Main evaluation function
-def evaluate_all_models(models_folder, test_loader, device='cuda'):
+def evaluate_all_models(ratio, models_folder, test_loader, device='cuda'):
     model_files = [f for f in os.listdir(models_folder) if f.endswith('.pth') and 'device' in f]
     total_accuracy = 0.0
     total_f1 = 0.0
     num_models = len(model_files)
+    #randomly sample 50% of the models
+    model_files = random.sample(model_files, int(ratio*num_models))
+    accuracies = []
+    f1_scores = []
+    ids = []
 
     for model_file in model_files:
         model_path = os.path.join(models_folder, model_file)
@@ -38,13 +43,17 @@ def evaluate_all_models(models_folder, test_loader, device='cuda'):
         total_accuracy += accuracy
         total_f1 += f1
 
-    average_accuracy = total_accuracy / num_models
-    average_f1 = total_f1 / num_models
+        ids.append(model_file.split('_')[1])
+        accuracies.append(accuracy)
+        f1_scores.append(f1)
+
+    average_accuracy = total_accuracy / (ratio*num_models)
+    average_f1 = total_f1 / (ratio*num_models)
     print(f'Average accuracy of all models: {average_accuracy:.4f}')
     print(f'Average F1 score of all models: {average_f1:.4f}')
-    return average_accuracy, average_f1
+    return accuracies, f1_scores, ids
 
-def run_evaluation():
+def run_evaluation(ratio):
     transform = transforms.Compose([
                 transforms.ToTensor(),
                 transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
@@ -57,8 +66,15 @@ def run_evaluation():
     models_folder = './checkpoints'
 
     # Evaluate all models and get the average accuracy
-    average_accuracy, average_f1 = evaluate_all_models(models_folder, test_loader, device=DEVICE)
+    accuracies, f1_scores, ids = evaluate_all_models(ratio, models_folder, test_loader, device=DEVICE)
+
+    # Save the results to a CSV file
+    results = list(zip(ids, accuracies, f1_scores))
+    with open('results.csv', 'w') as f:
+        f.write('id,accuracy,f1_score\n')
+        for result in results:
+            f.write(f'{result[0]},{result[1]:.4f},{result[2]:.4f}\n')
 
 if __name__ == '__main__':
     
-    run_evaluation()
+    run_evaluation(1.0)

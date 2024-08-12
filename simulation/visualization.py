@@ -18,7 +18,7 @@ class Visualization:
         self.circles = []
         self.labels = []
         self.start_time = time.time()
-        # self.counter = 0
+        self.counter = 0
 
         # To handle the on_draw event correctly
         @self.window.event
@@ -45,32 +45,33 @@ class Visualization:
         self.network.run_dkmeans()
         # Federated learning
         self.network.run_local_training()
-        
-        self.network.reset_gossip_counters()
+        run_evaluation(0.5)
+        # self.network.reset_gossip_counters()
 
+        print(f"Running gossip protocols in loop: {self.counter}")
         # Inner-cluster communication
+        self.network.reset_gossip_counters()
         for _ in range(configuration.INNER_GOSSIP_ITERATIONS):
-            print(f"Running Inner-cluster protocol: {_ + 1}")
+            
             self.network.reset_paired_devices()
             self.network.run_inner_gossip_comm()
-        
+        # print("______________________________________________________________________________")
+        time.sleep(1)  
         # Inter-cluster communication
-        # for _ in range(configuration.INTER_GOSSIP_ITERATIONS):
-        #     print(f"Running inter-cluster protocol: {_ + 1}")
-        #     self.network.reset_paired_devices()
-        #     self.network.run_inter_gossip_comm()
-
+        self.network.reset_gossip_counters()
+        for _ in range(configuration.INTER_GOSSIP_ITERATIONS):
+            self.network.reset_paired_devices()
+            self.network.run_inter_gossip_comm()
         
-
         # eval every 10 minutes
         if time.time() - self.start_time > 600:
-            run_evaluation()
+            run_evaluation(1.0)
             self.start_time = time.time()
 
         self.draw_devices()
 
         # i = input("Press Enter to continue...")
-        # self.counter += 1
+        self.counter += 1
 
     def draw_devices(self):
         self.circles.clear()
@@ -101,6 +102,7 @@ class Visualization:
         def signal_handler(sig, frame):
             run_time = time.time() - start_time
             print(f"Program run time: {run_time:.2f} seconds")
+            self.network.save_device_location()
             sys.exit(0)  # Ensure the program exits after printing
 
         # Set the signal handler for SIGINT (Ctrl+C)

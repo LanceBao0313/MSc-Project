@@ -72,11 +72,12 @@ class Device:
         command = payload.get("command")
         message_data = payload.get("message_data")
         gossip_counter = payload.get("gossip_counter")
+        num_samples = payload.get("num_samples")
 
         if message_data is not None:
             if command == "reply":
-                print(f"sender: {sender_id}, reci: {self.id}")
-                running_avg_weight = running_fedAvg(extract_classifier_weights(self.model), message_data, self.gossip_counter, gossip_counter)
+                # print(f"sender: {sender_id}, reci: {self.id}")
+                running_avg_weight = running_fedAvg(extract_classifier_weights(self.model), message_data, self.gossip_counter, gossip_counter, self.num_samples, num_samples)
                 set_weights(self.model, running_avg_weight)
                 self.gossip_counter += gossip_counter # use the total counter of two devices
                 # Reply to the sender
@@ -86,6 +87,7 @@ class Device:
                     "command": "None",
                     "message_data": running_avg_weight,
                     "gossip_counter": self.gossip_counter,
+                    "num_samples": self.num_samples
                 })
                 self.client.publish(sender_topic_sub, payload)
             else:
@@ -127,6 +129,7 @@ class Device:
             "command": "reply",
             "message_data": data, #self.model.classifier.linear.weight.data,
             "gossip_counter": self.gossip_counter,
+            "num_samples": self.num_samples
         })
         # Publish the message to the partner's communication topic
         self.client.publish(partner.topic_sub, payload)
@@ -140,8 +143,8 @@ class Device:
         # Function for local training
         #print(f"Device {self.id} is training")
         criterion = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(self.model.classifier.parameters(), lr=0.005)
-        train(self.model, self.dataloader, criterion, optimizer, self.checkpoint_path)
+        optimizer = torch.optim.Adam(self.model.classifier.parameters(), lr=0.001)
+        return train(self.model, self.dataloader, criterion, optimizer, self.checkpoint_path)
     
 ###############################################################################################
 #################################### DK-means #################################################
@@ -256,12 +259,11 @@ class Device:
         if self.paired:
             return
 
-        for device in self.in_range_devices:
-            if device.paired:
-                self.in_range_devices.remove(device)
+        available_devices = [device for device in self.in_range_devices if (not device.paired) and
+                              (device.cluster_id != self.cluster_id)]
 
-        if self.in_range_devices:
-            partner = random.choice(self.in_range_devices)
+        if available_devices:
+            partner = random.choice(available_devices)
             weights = extract_classifier_weights(self.model)
             self.communicate(partner, weights)
             self.paired = True

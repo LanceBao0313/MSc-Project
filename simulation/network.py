@@ -5,6 +5,8 @@ import threading
 import time
 import torch.multiprocessing as mp
 import torch
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 random.seed(configuration.RANDOM_SEED)
 
@@ -43,6 +45,7 @@ class Network:
             device.paired = False
 
     def run_inner_gossip_comm(self):
+        # self.reset_gossip_counters()
         # shaffle the devices to avoid bias
         random.shuffle(self.devices)
         for device in self.devices:
@@ -51,6 +54,8 @@ class Network:
         #print("__________________________")
     
     def run_inter_gossip_comm(self):
+        # self.reset_gossip_counters()
+        random.shuffle(self.devices)
         for device in self.devices:
             device.inter_gossip()
         #time.sleep(1)  # Adjust the interval as needed
@@ -70,15 +75,23 @@ class Network:
                 device.update_cluster_heads()
     
     def run_local_training(self):
-        counter = 1
-        for device in self.devices:
-            device.local_training()
-            print(f"Device [{counter}|{len(self.devices)}] trained")
-            counter += 1
+        pbar = tqdm(self.devices, desc="Training devices")
+        for counter, device in enumerate(pbar, start=1):
+            loss, acc = device.local_training()
+            pbar.set_description(f"loss {loss:.4f}, accuracy {acc:.4f}")
+
     def train_device(self, device):
         device.local_training()
 
     def parallel_training(self):
         with mp.Pool(processes=torch.cuda.device_count()) as pool:  # Use the number of GPUs available
             pool.map(self.train_device, self.devices)
+
+    def save_device_location(self):
+        # Save the results to a CSV file
+        with open('device_locations.csv', 'w') as f:
+            f.write('id,x,y\n')
+            for device in self.devices:
+                f.write(f'{device.id},{device.x},{device.y}\n')
+
         

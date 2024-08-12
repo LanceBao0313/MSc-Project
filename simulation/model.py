@@ -4,12 +4,14 @@ from configuration import NUM_EPOCHS, NUM_OF_CLASSES, DEVICE
 from mcunet.mcunet.model_zoo import build_model
 import os
 import numpy as np
+import math
 
 def train(model, train_loader, criterion, optimizer, checkpoint_path):
 	# model, optimizer = load_checkpoint(checkpoint_path)
 	model.to(DEVICE)
 	# model.train()
 	# Training loop
+	correct, total, epoch_loss = 0, 0, 0.0
 	for epoch in range(NUM_EPOCHS):
 		running_loss = 0.0
 		counter = 0
@@ -27,12 +29,17 @@ def train(model, train_loader, criterion, optimizer, checkpoint_path):
 			
 			running_loss += loss.item()
 			counter += 1
-		
-		epoch_loss = running_loss / len(train_loader)
-		#print(f"Epoch [{epoch+1}/{NUM_EPOCHS}], Loss: {epoch_loss:.4f}")
+		epoch_loss += loss
+		total += labels.size(0)
+		correct += (torch.max(outputs.data, 1)[1] == labels).sum().item()
+	epoch_loss /= len(train_loader.dataset)
+	epoch_acc = correct / total
+	#print(f"Epoch [{epoch+1}/{NUM_EPOCHS}], Loss: {epoch_loss:.4f}")
+	# print(f"Epoch {epoch+1}: train loss {epoch_loss:.4f}, accuracy {epoch_acc:.4f}")
 	save_checkpoint(model, optimizer, checkpoint_path)
 	#print("Training completed!")
 	# print(f"Loss: {epoch_loss:.4f}")
+	return epoch_loss, epoch_acc
 
 
 def replace_fc_layer(model, num_classes):
@@ -102,18 +109,26 @@ def load_checkpoint(filepath):
     
 #     return avg_weights
 
-def running_fedAvg(weight_1, weight_2, counter_1, counter_2):
+def running_fedAvg(weight_1, weight_2, counter_1, counter_2, num_samples_1, num_samples_2):
     # combined_average = (running_avg_A * count_A + running_avg_B * count_B) / (count_A + count_B)
-    avg_weights = []
-    for w1, w2 in zip(weight_1, weight_2):
-        if not isinstance(w1, torch.Tensor):
-            w1 = torch.tensor(w1, dtype=torch.float32)
-        if not isinstance(w2, torch.Tensor):
-            w2 = torch.tensor(w2, dtype=torch.float32)
-            
-        avg_weight = (w1 * counter_1 + w2 * counter_2) / (counter_1 + counter_2)
-        avg_weights.append(avg_weight)
-    return avg_weights
+	gcd_counter = math.gcd(counter_1, counter_2)
+	gcd_samples = math.gcd(num_samples_1, num_samples_2)
+	# print(f"counter_1: {counter_1}, counter_2: {counter_2}")
+	counter_1 = counter_1 // gcd_counter
+	counter_2 = counter_2 // gcd_counter
+	num_samples_1 = num_samples_1 // gcd_samples
+	num_samples_2 = num_samples_2 // gcd_samples
+
+	avg_weights = []
+	for w1, w2 in zip(weight_1, weight_2):
+		if not isinstance(w1, torch.Tensor):
+			w1 = torch.tensor(w1, dtype=torch.float32)
+		if not isinstance(w2, torch.Tensor):
+			w2 = torch.tensor(w2, dtype=torch.float32)
+			
+		avg_weight = (w1*counter_1*num_samples_1+w2*counter_2*num_samples_2)/(counter_1*num_samples_1+counter_2*num_samples_2)
+		avg_weights.append(avg_weight)
+	return avg_weights
 
 
 def reset_classifier_weights(model):
