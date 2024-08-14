@@ -3,26 +3,13 @@ import numpy as np
 import paho.mqtt.client as mqtt
 import time
 import pickle
-# import threading
-from configuration import EMD_FLAG, RANDOM_SEED, PORT, DEVICE, MOVE_SPEED, COMM_RANGE, DEVICE_DEFAULT_COLOUR, MIN_CLUSTER_SIZE, NUM_OF_CLASSES
-from model import save_checkpoint, train, load_checkpoint, reset_classifier_weights, get_parameters, set_parameters, cumulative_fedAvg
-# from mcunet.mcunet.model_zoo import build_model
+import threading
+from configuration import PORT, DEVICE, MOVE_SPEED, COMM_RANGE, DEVICE_DEFAULT_COLOUR, MIN_CLUSTER_SIZE, NUM_OF_CLASSES
+from model import replace_fc_layer, train, load_checkpoint, reset_classifier_weights, extract_classifier_weights, set_weights, running_fedAvg
+from mcunet.mcunet.model_zoo import build_model
 import torch.nn as nn
 import torch
-from math import exp
-from dataset import calculate_emd, get_emd_distance, calculate_label_distribution
 
-from eval import evaluate_model
-# from torchvision.datasets import CIFAR10
-# from torchvision import transforms
-# from torch.utils.data import DataLoader
-# from configuration import DATA_PATH, BATCH_SIZE
-
-
-np.random.seed(RANDOM_SEED)
-random.seed(RANDOM_SEED)
-torch.manual_seed(RANDOM_SEED)
-torch.cuda.manual_seed(RANDOM_SEED)
 
 class Device:
     def __init__(self, id, x, y, dataloader, is_head=False, color = DEVICE_DEFAULT_COLOUR):
@@ -33,18 +20,13 @@ class Device:
         if self.id != -1:
             # model, resolution, description = build_model(net_id="mcunet-in3", pretrained=True)
             # self.model = replace_fc_layer(model, NUM_OF_CLASSES)
-            self.model, _, self.optimizer = load_checkpoint("./checkpoints/baseline_checkpoint_2.pth")
+            self.model = load_checkpoint("./checkpoints/baseline_checkpoint_2.pth")
             reset_classifier_weights(self.model)
             self.model.to(DEVICE)
             self.checkpoint_path = f"./checkpoints/device_{self.id}_checkpoint.pth"
-            self.learning_rate = 0.001
-            self.rounds = 0
 
             self.dataloader = dataloader
-            self.distribution = calculate_label_distribution(dataloader)
-            self.emd = calculate_emd(self.distribution)
-            print(f"Device {self.id} EMD: {self.emd}, num_samples: {len(dataloader.dataset)}")
-            self.num_samples = len(dataloader.dataset)*(1-2*self.emd)**3
+            self.num_samples = len(dataloader.dataset)
             self.cluster_id = None
             self.in_range_devices = []
             self.is_head = is_head
@@ -61,10 +43,8 @@ class Device:
             # self.publish_thread = None  
             self.direction = random.uniform(0, 2*np.pi) 
             self.color = color
-            self.total_samples = self.num_samples
-            self.total_weights = [param * self.num_samples for param in get_parameters(self.model)]
-            self.seen_devices = []
-            print(f"Device {self.id} samples: {self.num_samples}")
+            self.gossip_counter = 1
+
 ###############################################################################################
 ################################# MQTT Client #################################################
 ###############################################################################################
@@ -91,34 +71,32 @@ class Device:
         sender_topic_sub = payload.get("sender_topic_sub")
         command = payload.get("command")
         message_data = payload.get("message_data")
+        gossip_counter = payload.get("gossip_counter")
         num_samples = payload.get("num_samples")
 
-        if sender_id not in self.seen_devices:
-            self.seen_devices.append(sender_id)
-        else:
-            return
-        
         if message_data is not None:
             if command == "reply":
                 # print(f"sender: {sender_id}, reci: {self.id}")
-                self.total_weights, self.total_samples = cumulative_fedAvg(self.total_weights, message_data, self.total_samples, num_samples)
-                # self.total_weight = total_weight
-                # self.total_samples = total_samples
+                running_avg_weight = running_fedAvg(extract_classifier_weights(self.model), message_data, self.gossip_counter, gossip_counter, self.num_samples, num_samples)
+                set_weights(self.model, running_avg_weight)
+                self.gossip_counter += gossip_counter # use the total counter of two devices
                 # Reply to the sender
                 payload = pickle.dumps({
                     "sender_id": self.id,
                     "sender_topic_sub": self.topic_sub,
                     "command": "None",
-                    "message_data": get_parameters(self.model),
-                    "num_samples": self.num_samples,
-                    "emd": self.emd
+                    "message_data": running_avg_weight,
+                    "gossip_counter": self.gossip_counter,
+                    "num_samples": self.num_samples
                 })
                 self.client.publish(sender_topic_sub, payload)
             else:
-                self.total_weights, self.total_samples = cumulative_fedAvg(self.total_weights, message_data, self.total_samples, num_samples)
-
+                self.gossip_counter = gossip_counter
+                set_weights(self.model, message_data)
         
         # print(f"Device {self.id} received message from Device {sender_id}")
+
+        
 
     def publish_data(self):
         while self.publishing:
@@ -150,8 +128,8 @@ class Device:
             "sender_topic_sub": self.topic_sub,
             "command": "reply",
             "message_data": data, #self.model.classifier.linear.weight.data,
-            "num_samples": self.num_samples,
-            "emd": self.emd
+            "gossip_counter": self.gossip_counter,
+            "num_samples": self.num_samples
         })
         # Publish the message to the partner's communication topic
         self.client.publish(partner.topic_sub, payload)
@@ -164,12 +142,9 @@ class Device:
     def local_training(self):
         # Function for local training
         #print(f"Device {self.id} is training")
-        # optimizer = torch.optim.Adam(self.model.classifier.parameters(), lr=0.005)
-        self.rounds += 1
-        self.learning_rate *= exp(-0.1 * self.rounds)
-        self.optimizer = torch.optim.Adam(self.model.classifier.parameters(), lr=self.learning_rate, weight_decay=1e-3)
-        print(f"learning rate: {self.learning_rate}")
-        return train(self.model, self.dataloader, self.optimizer, self.checkpoint_path, self.num_samples, self.emd)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(self.model.classifier.parameters(), lr=0.001)
+        return train(self.model, self.dataloader, criterion, optimizer, self.checkpoint_path)
     
 ###############################################################################################
 #################################### DK-means #################################################
@@ -203,7 +178,7 @@ class Device:
                     self.color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
                 else:
                     # Find the nearest neighbor in comm range
-                    distances = [self.calculate_distance(self, device, emd=EMD_FLAG) for device in self.in_range_devices]
+                    distances = [self.calculate_distance(self, device) for device in self.in_range_devices]
                     closest_index = np.argmin(distances)
                     closest_device = self.in_range_devices[closest_index]
                     # Join the cluster of the closest device (one-hop clustering) 
@@ -234,7 +209,7 @@ class Device:
             return None
         cluster_heads = [device for device in self.in_range_devices if device.is_head]
         if cluster_heads:
-            distances = [self.calculate_distance(self, head, emd=EMD_FLAG) for head in cluster_heads]
+            distances = [self.calculate_distance(self, head) for head in cluster_heads]
             closest_index = np.argmin(distances)
             closest_head = cluster_heads[closest_index]
             return closest_head
@@ -271,11 +246,11 @@ class Device:
             return
 
         available_devices = [device for device in self.in_range_devices if (not device.paired) and
-                             (device.cluster_id == self.cluster_id) and (device.cluster_id not in self.seen_devices)]
+                              (device.cluster_id == self.cluster_id)]
 
         if available_devices:
             partner = random.choice(available_devices)
-            weights = get_parameters(self.model)
+            weights = extract_classifier_weights(self.model)
             self.communicate(partner, weights)
             self.paired = True
             partner.paired = True
@@ -285,11 +260,11 @@ class Device:
             return
 
         available_devices = [device for device in self.in_range_devices if (not device.paired) and
-                              (device.cluster_id != self.cluster_id) and (device.cluster_id not in self.seen_devices)]
+                              (device.cluster_id != self.cluster_id)]
 
         if available_devices:
             partner = random.choice(available_devices)
-            weights = get_parameters(self.model)
+            weights = extract_classifier_weights(self.model)
             self.communicate(partner, weights)
             self.paired = True
             partner.paired = True
@@ -312,37 +287,10 @@ class Device:
         self.x += MOVE_SPEED * np.cos(self.direction)
         self.y += MOVE_SPEED * np.sin(self.direction)
 
-    def calculate_distance(self, device_a, device_b, emd = False):
-        if emd:
-            return get_emd_distance(device_a.distribution, device_b.distribution)*100
-        else:
-            return np.sqrt((device_a.x - device_b.x)**2 + (device_a.y - device_b.y)**2)
-        
+    def calculate_distance(self, device_a, device_b):
+        return np.sqrt((device_a.x - device_b.x)**2 + (device_a.y - device_b.y)**2)
 
     def in_range(self, other_device):
         distance = self.calculate_distance(self, other_device)
         return distance <= COMM_RANGE
     
-    def aggregate_model(self):
-        avg_weights = [weight / self.total_samples for weight in self.total_weights]
-        avg_weights = []
-        for weight in self.total_weights:  
-            avg_weight = weight / self.total_samples
-            avg_weights.append(avg_weight)
-        set_parameters(self.model, avg_weights)
-        save_checkpoint(self.model, self.optimizer, self.num_samples, self.emd, self.checkpoint_path)
-
-        self.total_samples = self.num_samples
-        self.total_weights = [param * self.num_samples for param in get_parameters(self.model)]
-        self.seen_devices = []
-
-        # transform = transforms.Compose([
-        #         transforms.ToTensor(),
-        #         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-        #     ])
-
-        # test_dataset = CIFAR10(root= DATA_PATH, train=False, download=False, transform=transform)
-        # test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
-
-        # acc, f1 = evaluate_model(self.model, test_loader, DEVICE)
-        # print(f"Device {self.id}, seen:{len(self.seen_devices)} accuracy: {acc:.4f}, F1 score: {f1:.4f}")

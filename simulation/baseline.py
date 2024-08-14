@@ -30,7 +30,7 @@ dataloader = dataloaders[0]
 # Load the model
 # model, resolution, description = build_model(net_id="mcunet-in3", pretrained=True)
 # model = replace_fc_layer(model, NUM_OF_CLASSES)
-model = load_checkpoint(checkpoint_path)
+model, _ = load_checkpoint(checkpoint_path)
 reset_classifier_weights(model)
 model.to(DEVICE)
 

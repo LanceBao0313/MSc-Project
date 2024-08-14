@@ -8,6 +8,8 @@ import signal
 import sys
 from eval import run_evaluation
 
+random.seed(configuration.RANDOM_SEED)
+
 class Visualization:
     def __init__(self, network):
         self.network = network
@@ -44,8 +46,8 @@ class Visualization:
         # DK-means
         self.network.run_dkmeans()
         # Federated learning
+        # if self.counter == 0:
         self.network.run_local_training()
-        run_evaluation(0.5)
         # self.network.reset_gossip_counters()
 
         print(f"Running gossip protocols in loop: {self.counter}")
@@ -56,13 +58,20 @@ class Visualization:
             self.network.reset_paired_devices()
             self.network.run_inner_gossip_comm()
         # print("______________________________________________________________________________")
-        time.sleep(1)  
-        # Inter-cluster communication
-        self.network.reset_gossip_counters()
-        for _ in range(configuration.INTER_GOSSIP_ITERATIONS):
-            self.network.reset_paired_devices()
-            self.network.run_inter_gossip_comm()
+        time.sleep(1) 
+        # self.network.aggregate_models()
+        # # Inter-cluster communication
+        # self.network.reset_gossip_counters()
+        # for _ in range(configuration.INTER_GOSSIP_ITERATIONS):
+        #     self.network.reset_paired_devices()
+        #     self.network.run_inter_gossip_comm()
         
+        
+        print("aggregating the models")
+        self.network.aggregate_models()
+        self.network.clear_seen_devices()
+
+        run_evaluation(1.0)
         # eval every 10 minutes
         if time.time() - self.start_time > 600:
             run_evaluation(1.0)

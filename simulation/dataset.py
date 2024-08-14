@@ -7,6 +7,8 @@ import random
 from collections import defaultdict
 from configuration import BATCH_SIZE, NUMBER_OF_DEVICES, NUM_OF_CLASSES, NON_IID_ALPHA, RANDOM_SEED
 from typing import List, Tuple
+from collections import Counter
+from scipy.stats import wasserstein_distance
 
 # class CIFAR10Subset(Dataset):
 #     def __init__(self, data, targets, transform=None):
@@ -85,26 +87,6 @@ def get_CIFAR10_dataloader(root, train=True):
 
 
 def get_nonIID_dataloader(root, train=True):
-    """Partition according to the Dirichlet distribution.
-
-    Parameters
-    ----------
-    num_clients : int
-        The number of clients that hold a part of the data
-    alpha: float
-        Parameter of the Dirichlet distribution
-    batch_size: int
-        Batch size for the data loaders
-    seed : int, optional
-        Used to set a fix seed to replicate experiments, by default 42
-    dataset_name : str
-        Name of the dataset to be used
-
-    Returns
-    -------
-    Tuple[List[DataLoader], DataLoader]
-        The list of data loaders for each client, the test data loader.
-    """
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
@@ -113,41 +95,124 @@ def get_nonIID_dataloader(root, train=True):
     # Load CIFAR-10 dataset
     cifar10 = CIFAR10(root=root, train=train, download=False, transform=transform)
 
-    min_required_samples_per_client = 10
-    min_samples = 0
     prng = np.random.default_rng(RANDOM_SEED)
-
-    # get the targets
-    tmp_t = cifar10.targets
-    if isinstance(tmp_t, list):
-        tmp_t = np.array(tmp_t)
-    if isinstance(tmp_t, torch.Tensor):
-        tmp_t = tmp_t.numpy()
+    tmp_t = np.array(cifar10.targets)
     num_classes = len(set(tmp_t))
     total_samples = len(tmp_t)
-    while min_samples < min_required_samples_per_client:
-        idx_clients: List[List[int]] = [[] for _ in range(NUMBER_OF_DEVICES)]
-        for k in range(num_classes):
-            idx_k = np.where(tmp_t == k)[0]
-            prng.shuffle(idx_k)
-            proportions = prng.dirichlet(np.repeat(NON_IID_ALPHA, NUMBER_OF_DEVICES))
-            proportions = np.array(
-                [
-                    p * (len(idx_j) < total_samples / NUMBER_OF_DEVICES)
-                    for p, idx_j in zip(proportions, idx_clients)
-                ]
-            )
-            proportions = proportions / proportions.sum()
-            proportions = (np.cumsum(proportions) * len(idx_k)).astype(int)[:-1]
-            idx_k_split = np.split(idx_k, proportions)
-            idx_clients = [
-                idx_j + idx.tolist() for idx_j, idx in zip(idx_clients, idx_k_split)
-            ]
-            min_samples = min([len(idx_j) for idx_j in idx_clients])
+    
+    idx_clients = [[] for _ in range(NUMBER_OF_DEVICES)]
+
+    # Distribute data according to Dirichlet distribution
+    for k in range(num_classes):
+        idx_k = np.where(tmp_t == k)[0]
+        prng.shuffle(idx_k)
+        
+        # Generate Dirichlet proportions for current class
+        proportions = prng.dirichlet(np.repeat(NON_IID_ALPHA, NUMBER_OF_DEVICES))
+        
+        # Normalize proportions to ensure they sum to 1 and then scale by the number of samples
+        proportions = np.array([int(p * len(idx_k)) for p in proportions])
+        
+        # Ensure the total number of samples is correctly partitioned
+        while proportions.sum() < len(idx_k):
+            proportions[prng.choice(len(proportions))] += 1
+        while proportions.sum() > len(idx_k):
+            proportions[prng.choice(len(proportions))] -= 1
+        
+        # Split indices based on calculated proportions
+        idx_k_split = np.split(idx_k, np.cumsum(proportions)[:-1])
+        idx_clients = [idx_j + idx.tolist() for idx_j, idx in zip(idx_clients, idx_k_split)]
 
     trainsets_per_client = [Subset(cifar10, idxs) for idxs in idx_clients]
    
     # Create data loaders for each client
-    client_dataloaders = [DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True) for dataset in trainsets_per_client]
+    client_dataloaders = [
+        DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
+        for dataset in trainsets_per_client
+    ]
 
     return client_dataloaders
+
+def split_dataset_by_dirichlet(root, number_of_clients = NUMBER_OF_DEVICES, alpha=NON_IID_ALPHA):
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
+
+    # Load CIFAR-10 dataset
+    dataset = CIFAR10(root=root, train=True, download=False, transform=transform)
+
+    # Extract labels from the dataset
+    labels = np.array([dataset[i][1] for i in range(len(dataset))])
+    unique_labels = np.unique(labels)
+    
+    # Initialize dictionary to store indices of data subsets for each client
+    client_data_indices = defaultdict(list)
+    
+    # For each label, partition data among clients using Dirichlet distribution
+    for label in unique_labels:
+        # Get all data indices for this label
+        indices_with_label = np.where(labels == label)[0]
+        
+        # Use Dirichlet distribution to generate proportions
+        proportions = np.random.dirichlet([alpha] * number_of_clients)
+        
+        # Determine the split indices for each client
+        split_indices = np.cumsum(proportions) * len(indices_with_label)
+        split_indices = np.floor(split_indices).astype(int)
+        
+        # Shuffle the indices
+        np.random.shuffle(indices_with_label)
+        
+        # Split data and assign to clients
+        start_idx = 0
+        for client_id, end_idx in enumerate(split_indices):
+            client_data_indices[client_id].extend(indices_with_label[start_idx:end_idx])
+            start_idx = end_idx
+    
+    # Create subsets for each client
+    client_datasets = [Subset(dataset, indices) for indices in client_data_indices.values()]
+    
+    client_dataloaders = [
+        DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
+        for dataset in client_datasets
+    ]
+    
+    return client_dataloaders
+
+def calculate_label_distribution(dataloader):
+    # Count the occurrences of each label in the dataloader
+    label_counts = Counter()
+    for _, label in dataloader:
+        label_counts.update(label.numpy().tolist())
+    
+    # Convert counts to distribution (as a probability distribution)
+    total_labels = sum(label_counts.values())
+    label_distribution = {label: count / total_labels for label, count in label_counts.items()}
+    
+    return label_distribution
+
+def calculate_emd(distribution):
+
+    # Assuming a uniform global distribution for CIFAR-10
+    global_distribution = np.array([0.1] * 10)  # Each class has equal probability of 0.1
+
+    # Convert the subset distribution to an array (in the order of labels 0 to 9)
+    subset_array = np.array([distribution.get(i, 0) for i in range(10)])
+    
+    # Calculate Earth Mover's Distance (EMD) between the subset and global distributions
+    emd = wasserstein_distance(subset_array, global_distribution)
+    
+    return emd
+
+def get_emd_distance(distribution1, distribution2):
+    # Calculate the label distributions for the two dataloaders
+
+    # Convert the distributions to arrays (in the order of labels 0 to 9)
+    distribution1_array = np.array([distribution1.get(i, 0) for i in range(10)])
+    distribution2_array = np.array([distribution2.get(i, 0) for i in range(10)])
+    
+    # Calculate Earth Mover's Distance (EMD) between the two distributions
+    emd = wasserstein_distance(distribution1_array, distribution2_array)
+    
+    return emd

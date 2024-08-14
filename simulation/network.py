@@ -7,8 +7,11 @@ import torch.multiprocessing as mp
 import torch
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from model import get_parameters
 
 random.seed(configuration.RANDOM_SEED)
+torch.manual_seed(configuration.RANDOM_SEED)
+torch.cuda.manual_seed(configuration.RANDOM_SEED)
 
 class Network:
     def __init__(self, num_devices, num_clusters, dataloaders):
@@ -94,4 +97,11 @@ class Network:
             for device in self.devices:
                 f.write(f'{device.id},{device.x},{device.y}\n')
 
+    def aggregate_models(self):
+        for device in self.devices:
+            device.aggregate_model()
         
+    def clear_seen_devices(self):
+        for device in self.devices:
+            # print(f"Device {device.id} has seen devices {len(device.seen_devices)}")
+            device.seen_devices = []

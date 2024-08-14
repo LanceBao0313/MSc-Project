@@ -1,46 +1,53 @@
 import torch.nn as nn
 import torch
-from configuration import NUM_EPOCHS, NUM_OF_CLASSES, DEVICE
+from configuration import NUM_EPOCHS, NUM_OF_CLASSES, DEVICE, RANDOM_SEED
 from mcunet.mcunet.model_zoo import build_model
 import os
 import numpy as np
 import math
+from collections import OrderedDict
+from typing import List
 
-def train(model, train_loader, criterion, optimizer, checkpoint_path):
+np.random.seed(RANDOM_SEED)
+torch.manual_seed(RANDOM_SEED)
+torch.cuda.manual_seed(RANDOM_SEED)
+
+def train(model, train_loader, optimizer, checkpoint_path, num_samples, emd):
 	# model, optimizer = load_checkpoint(checkpoint_path)
+	criterion = nn.CrossEntropyLoss()
 	model.to(DEVICE)
-	# model.train()
+	model.train()
+
+	for state in optimizer.state.values():
+		for k, v in state.items():
+			if isinstance(v, torch.Tensor):
+				state[k] = v.to(DEVICE)
+
 	# Training loop
 	correct, total, epoch_loss = 0, 0, 0.0
 	for epoch in range(NUM_EPOCHS):
-		running_loss = 0.0
-		counter = 0
+		correct, total, epoch_loss = 0, 0, 0.0
 		
 		for inputs, labels in train_loader:
 			# if counter >= 30:
 			# 	break
 			inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
-			
+			# print(f"labels: {labels[:10]}")
 			optimizer.zero_grad()
 			outputs = model(inputs)
 			loss = criterion(outputs, labels)
 			loss.backward()
 			optimizer.step()
 			
-			running_loss += loss.item()
-			counter += 1
-		epoch_loss += loss
-		total += labels.size(0)
-		correct += (torch.max(outputs.data, 1)[1] == labels).sum().item()
-	epoch_loss /= len(train_loader.dataset)
-	epoch_acc = correct / total
-	#print(f"Epoch [{epoch+1}/{NUM_EPOCHS}], Loss: {epoch_loss:.4f}")
-	# print(f"Epoch {epoch+1}: train loss {epoch_loss:.4f}, accuracy {epoch_acc:.4f}")
-	save_checkpoint(model, optimizer, checkpoint_path)
-	#print("Training completed!")
-	# print(f"Loss: {epoch_loss:.4f}")
+			epoch_loss += loss
+			total += labels.size(0)
+			correct += (torch.max(outputs.data, 1)[1] == labels).sum().item()
+		epoch_loss /= len(train_loader.dataset)
+		epoch_acc = correct / total
+		# print(f"Epoch {epoch+1}:loss {epoch_loss:.4f}, accuracy {epoch_acc:.4f}, num_samples: {num_samples}")
+	save_checkpoint(model, optimizer, num_samples, emd, checkpoint_path)
+	# print(model.classifier[0].weight.data)
 	return epoch_loss, epoch_acc
-
 
 def replace_fc_layer(model, num_classes):
 	num_ftrs = model.classifier.in_features
@@ -60,10 +67,12 @@ def replace_fc_layer(model, num_classes):
 	model.classifier.requires_grad = True
 	return model
 
-def save_checkpoint(model, optimizer, filepath):
+def save_checkpoint(model, optimizer, num_samples, emd, filepath):
 	state = {
 		'model_state_dict': model.state_dict(),
 		'optimizer_state_dict': optimizer.state_dict(),
+		'num_samples': num_samples,
+		'emd': emd
 	}
 	torch.save(state, filepath)
 
@@ -71,12 +80,16 @@ def save_checkpoint(model, optimizer, filepath):
 def load_checkpoint(filepath):
 	model, resolution, description = build_model(net_id="mcunet-in3", pretrained=True)
 	model = replace_fc_layer(model, NUM_OF_CLASSES)
-	# optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+	optimizer = torch.optim.Adam(model.classifier.parameters(), lr=0.001, weight_decay=1e-3)
 	if os.path.isfile(filepath):
 		checkpoint = torch.load(filepath)
 		model.load_state_dict(checkpoint['model_state_dict'])
 		# optimizer.load_state_dict(checkpoint['optimizer_state_dict'])	
-	return model#, optimizer
+		if 'num_samples' in checkpoint:
+			num_samples = checkpoint['num_samples']
+			return model, num_samples, optimizer
+		else:
+			return model, 0, optimizer
 
 # def fedAvg(weight_list, sample_list):
 #     """Compute the weighted average of weights according to the number of samples.
@@ -130,6 +143,25 @@ def running_fedAvg(weight_1, weight_2, counter_1, counter_2, num_samples_1, num_
 		avg_weights.append(avg_weight)
 	return avg_weights
 
+# def cumulative_fedAvg(total_weight, weight, total_samples, num_samples):
+#     # combined_average = (running_avg_A * count_A + running_avg_B * count_B) / (count_A + count_B)
+
+# 	result_weights = []
+# 	for w1, w2 in zip(total_weight, weight):
+			
+# 		combined_weight = w1 + w2*num_samples
+# 		result_weights.append(combined_weight)
+# 	total_samples += num_samples
+# 	return result_weights, total_samples
+
+def cumulative_fedAvg(total_weight, weight, total_samples, num_samples):
+    result_weights = []
+    for w1, w2 in zip(total_weight, weight):
+        combined_weight = w1 + w2 * num_samples
+        result_weights.append(combined_weight)
+    total_samples += num_samples
+    return result_weights, total_samples
+
 
 def reset_classifier_weights(model):
     for layer in model.classifier:
@@ -155,3 +187,12 @@ def set_weights(model, weights):
             layer.weight.data = weights[weight_idx].clone()
             layer.bias.data = weights[weight_idx + 1].clone()
             weight_idx += 2
+
+def set_parameters(model, parameters: List[np.ndarray]):
+    params_dict = zip(model.classifier.state_dict().keys(), parameters)
+    state_dict = OrderedDict({k: torch.Tensor(v) for k, v in params_dict})
+    model.classifier.load_state_dict(state_dict, strict=True)
+
+
+def get_parameters(model) -> List[np.ndarray]:
+    return [val.cpu().numpy() for _, val in model.classifier.state_dict().items()]

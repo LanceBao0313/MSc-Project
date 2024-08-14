@@ -5,11 +5,17 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from model import load_checkpoint
 from dataset import CIFAR10
-from configuration import DATA_PATH, DEVICE, BATCH_SIZE
+from configuration import DATA_PATH, DEVICE, BATCH_SIZE, RANDOM_SEED
 import random
+
+random.seed(RANDOM_SEED)
+torch.manual_seed(RANDOM_SEED)
+torch.cuda.manual_seed(RANDOM_SEED)
+
 # Function to evaluate a model on the test dataset
 def evaluate_model(model, test_loader, device):
     model.to(device)
+    model.eval()
     correct = 0
     total = 0
     with torch.no_grad():
@@ -34,21 +40,24 @@ def evaluate_all_models(ratio, models_folder, test_loader, device='cuda'):
     accuracies = []
     f1_scores = []
     ids = []
+    total_samples = 0
 
     for model_file in model_files:
         model_path = os.path.join(models_folder, model_file)
-        model = load_checkpoint(model_path)
+        model, num_sample, _ = load_checkpoint(model_path)
         accuracy, f1 = evaluate_model(model, test_loader, device)
         print(f'Accuracy of model {model_file}: {accuracy:.4f}, F1 score: {f1:.4f}')
-        total_accuracy += accuracy
-        total_f1 += f1
+        total_accuracy += accuracy*num_sample
+        total_f1 += f1*num_sample
+        total_samples += num_sample
 
         ids.append(model_file.split('_')[1])
         accuracies.append(accuracy)
         f1_scores.append(f1)
 
-    average_accuracy = total_accuracy / (ratio*num_models)
-    average_f1 = total_f1 / (ratio*num_models)
+    average_accuracy = total_accuracy / total_samples
+
+    average_f1 = total_f1 / total_samples
     print(f'Average accuracy of all models: {average_accuracy:.4f}')
     print(f'Average F1 score of all models: {average_f1:.4f}')
     return accuracies, f1_scores, ids
