@@ -11,7 +11,8 @@ import torch.nn as nn
 import torch
 from math import exp
 from dataset import calculate_emd, get_emd_distance, calculate_label_distribution
-
+import os
+import csv
 from eval import evaluate_model
 # from torchvision.datasets import CIFAR10
 # from torchvision import transforms
@@ -43,8 +44,12 @@ class Device:
             self.dataloader = dataloader
             self.distribution = calculate_label_distribution(dataloader)
             self.emd = calculate_emd(self.distribution)
-            print(f"Device {self.id} EMD: {self.emd}, num_samples: {len(dataloader.dataset)}")
-            self.num_samples = len(dataloader.dataset)*(1-2*self.emd)**3
+            
+            if EMD_FLAG:
+                self.num_samples = len(dataloader.dataset)*(1-2*self.emd)**3
+            else:
+                self.num_samples = len(dataloader.dataset)
+            print(f"Device {self.id} EMD: {self.emd}, num_samples: {self.num_samples}")
             self.cluster_id = None
             self.in_range_devices = []
             self.is_head = is_head
@@ -64,7 +69,6 @@ class Device:
             self.total_samples = self.num_samples
             self.total_weights = [param * self.num_samples for param in get_parameters(self.model)]
             self.seen_devices = []
-            print(f"Device {self.id} samples: {self.num_samples}")
 ###############################################################################################
 ################################# MQTT Client #################################################
 ###############################################################################################
@@ -167,9 +171,18 @@ class Device:
         # optimizer = torch.optim.Adam(self.model.classifier.parameters(), lr=0.005)
         self.rounds += 1
         self.learning_rate *= exp(-0.1 * self.rounds)
-        self.optimizer = torch.optim.Adam(self.model.classifier.parameters(), lr=self.learning_rate, weight_decay=1e-3)
-        print(f"learning rate: {self.learning_rate}")
-        return train(self.model, self.dataloader, self.optimizer, self.checkpoint_path, self.num_samples, self.emd)
+        self.optimizer = torch.optim.Adam(self.model.classifier.parameters(), lr=0.001, weight_decay=1e-5)
+        epoch_loss, epoch_acc = train(self.rounds, self.model, self.dataloader, self.optimizer, self.checkpoint_path, self.num_samples, self.emd)
+        csv_filename = "./data/DFL_60device_60range_05alpha_1layer.csv"
+        file_exists = os.path.isfile(csv_filename)
+        with open(csv_filename, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            if not file_exists:
+                writer.writerow(['round','device_id', 'train_loss', 'num_train_samples','x_pos', 'y_pos', 'emd'])
+            if isinstance(epoch_loss, torch.Tensor):
+                epoch_loss = epoch_loss.item()
+            writer.writerow([self.rounds, self.id, epoch_loss, self.num_samples, self.x, self.y, self.emd])
+        return epoch_loss, epoch_acc
     
 ###############################################################################################
 #################################### DK-means #################################################
@@ -270,9 +283,12 @@ class Device:
         if self.paired:
             return
 
-        available_devices = [device for device in self.in_range_devices if (not device.paired) and
-                             (device.cluster_id == self.cluster_id) and (device.cluster_id not in self.seen_devices)]
+        # available_devices = [device for device in self.in_range_devices if (not device.paired) and
+        #                      (device.cluster_id == self.cluster_id) and (device.cluster_id not in self.seen_devices)]
 
+        available_devices = [device for device in self.in_range_devices if (not device.paired) and
+                             (device.cluster_id not in self.seen_devices)]
+        
         if available_devices:
             partner = random.choice(available_devices)
             weights = get_parameters(self.model)
@@ -324,7 +340,7 @@ class Device:
         return distance <= COMM_RANGE
     
     def aggregate_model(self):
-        avg_weights = [weight / self.total_samples for weight in self.total_weights]
+        # avg_weights = [weight / self.total_samples for weight in self.total_weights]
         avg_weights = []
         for weight in self.total_weights:  
             avg_weight = weight / self.total_samples

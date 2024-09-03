@@ -59,30 +59,33 @@ class Visualization:
             self.network.run_inner_gossip_comm()
         # print("______________________________________________________________________________")
         time.sleep(1) 
-        # self.network.aggregate_models()
+        self.network.aggregate_models()
         # # Inter-cluster communication
         # self.network.reset_gossip_counters()
         # for _ in range(configuration.INTER_GOSSIP_ITERATIONS):
         #     self.network.reset_paired_devices()
         #     self.network.run_inter_gossip_comm()
         
-        
-        print("aggregating the models")
-        self.network.aggregate_models()
+        # print("aggregating the models")
+        # self.network.aggregate_models()
         self.network.clear_seen_devices()
 
-        run_evaluation(1.0)
+        run_evaluation(0.5)
+        print("time: ", time.time() - self.start_time)
         # eval every 10 minutes
-        if time.time() - self.start_time > 600:
-            run_evaluation(1.0)
-            self.start_time = time.time()
+        # if time.time() - self.start_time > 600:
+        #     run_evaluation(1.0)
+        #     self.start_time = time.time()
 
         self.draw_devices()
 
         # i = input("Press Enter to continue...")
+        #save image
+        
         self.counter += 1
 
     def draw_devices(self):
+        # pyglet.image.get_buffer_manager().get_color_buffer().save(f"../graphs/image_{self.counter}.png")
         self.circles.clear()
         self.labels.clear()
         #self.batch = pyglet.graphics.Batch()  # Clear previous batch
@@ -102,7 +105,7 @@ class Visualization:
                                         anchor_x='center',
                                         anchor_y='center',
                                         batch=self.batch,
-                                        color=(255, 255, 255, 255))
+                                        color=(0, 0, 0, 255))
             self.labels.append(label)
 
     def run(self):

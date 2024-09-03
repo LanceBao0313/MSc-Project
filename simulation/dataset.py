@@ -1,11 +1,11 @@
 import torch
 import torchvision.transforms as transforms
-from torchvision.datasets import CIFAR10
+from torchvision.datasets import CIFAR10, MNIST
 from torch.utils.data import DataLoader, Dataset, Subset
 import numpy as np
 import random
 from collections import defaultdict
-from configuration import BATCH_SIZE, NUMBER_OF_DEVICES, NUM_OF_CLASSES, NON_IID_ALPHA, RANDOM_SEED
+from configuration import BATCH_SIZE, NUMBER_OF_DEVICES, NUM_OF_CLASSES, NON_IID_ALPHA, RANDOM_SEED, DATASET
 from typing import List, Tuple
 from collections import Counter
 from scipy.stats import wasserstein_distance
@@ -70,33 +70,93 @@ np.random.seed(RANDOM_SEED)
     
 #     return dataloaders
 
-def get_CIFAR10_dataloader(root, train=True):
-    # Transformations
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    ])
+def get_dataloader(root, train=True):
+    if DATASET == 'CIFAR10':
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
 
-    # Load CIFAR-10 dataset
-    cifar10 = CIFAR10(root=root, train=train, download=False, transform=transform)
+        # Load the CIFAR-10 dataset
+        dataset = CIFAR10(root=root, train=train, download=False, transform=transform)
+    else:
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+        ])
+
+        # Load the MNIST dataset
+        dataset = MNIST(root=root, train=train, download=False, transform=transform)
     
     # Create DataLoader
-    dataloader = DataLoader(cifar10, batch_size=BATCH_SIZE, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
     
     return dataloader
 
+def get_IID_dataloader(root, train=True):
+    if DATASET == 'CIFAR10':
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+
+        # Load the CIFAR-10 dataset
+        dataset = CIFAR10(root=root, train=train, download=False, transform=transform)
+    else:
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+        ])
+
+        # Load the MNIST dataset
+        dataset = MNIST(root=root, train=train, download=False, transform=transform)
+    
+    # Get the total number of samples in the dataset
+    num_samples = len(dataset)
+    
+    # Calculate the size of each subset
+    subset_size = num_samples // NUMBER_OF_DEVICES
+    
+    # Generate random indices to split the dataset
+    indices = torch.randperm(num_samples).tolist()
+    
+    # Split the indices into subsets
+    subset_indices = [indices[i * subset_size:(i + 1) * subset_size] for i in range(NUMBER_OF_DEVICES)]
+    
+    # Handle any remaining samples (due to integer division)
+    if len(indices) > subset_size * NUMBER_OF_DEVICES:
+        subset_indices[-1].extend(indices[NUMBER_OF_DEVICES * subset_size:])
+    
+    # Create DataLoaders for each subset
+    dataloaders = []
+    for subset_idx in subset_indices:
+        subset = Subset(dataset, subset_idx)
+        dataloader = DataLoader(subset, batch_size=BATCH_SIZE, shuffle=True)
+        dataloaders.append(dataloader)
+    
+    return dataloaders
 
 def get_nonIID_dataloader(root, train=True):
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    ])
+    if DATASET == 'CIFAR10':
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
 
-    # Load CIFAR-10 dataset
-    cifar10 = CIFAR10(root=root, train=train, download=False, transform=transform)
+        # Load the CIFAR-10 dataset
+        dataset = CIFAR10(root=root, train=train, download=False, transform=transform)
+    else:
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+        ])
+
+        # Load the MNIST dataset
+        dataset = MNIST(root=root, train=train, download=False, transform=transform)
+    
 
     prng = np.random.default_rng(RANDOM_SEED)
-    tmp_t = np.array(cifar10.targets)
+    tmp_t = np.array(dataset.targets)
     num_classes = len(set(tmp_t))
     total_samples = len(tmp_t)
     
@@ -123,7 +183,7 @@ def get_nonIID_dataloader(root, train=True):
         idx_k_split = np.split(idx_k, np.cumsum(proportions)[:-1])
         idx_clients = [idx_j + idx.tolist() for idx_j, idx in zip(idx_clients, idx_k_split)]
 
-    trainsets_per_client = [Subset(cifar10, idxs) for idxs in idx_clients]
+    trainsets_per_client = [Subset(dataset, idxs) for idxs in idx_clients]
    
     # Create data loaders for each client
     client_dataloaders = [
@@ -131,53 +191,6 @@ def get_nonIID_dataloader(root, train=True):
         for dataset in trainsets_per_client
     ]
 
-    return client_dataloaders
-
-def split_dataset_by_dirichlet(root, number_of_clients = NUMBER_OF_DEVICES, alpha=NON_IID_ALPHA):
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    ])
-
-    # Load CIFAR-10 dataset
-    dataset = CIFAR10(root=root, train=True, download=False, transform=transform)
-
-    # Extract labels from the dataset
-    labels = np.array([dataset[i][1] for i in range(len(dataset))])
-    unique_labels = np.unique(labels)
-    
-    # Initialize dictionary to store indices of data subsets for each client
-    client_data_indices = defaultdict(list)
-    
-    # For each label, partition data among clients using Dirichlet distribution
-    for label in unique_labels:
-        # Get all data indices for this label
-        indices_with_label = np.where(labels == label)[0]
-        
-        # Use Dirichlet distribution to generate proportions
-        proportions = np.random.dirichlet([alpha] * number_of_clients)
-        
-        # Determine the split indices for each client
-        split_indices = np.cumsum(proportions) * len(indices_with_label)
-        split_indices = np.floor(split_indices).astype(int)
-        
-        # Shuffle the indices
-        np.random.shuffle(indices_with_label)
-        
-        # Split data and assign to clients
-        start_idx = 0
-        for client_id, end_idx in enumerate(split_indices):
-            client_data_indices[client_id].extend(indices_with_label[start_idx:end_idx])
-            start_idx = end_idx
-    
-    # Create subsets for each client
-    client_datasets = [Subset(dataset, indices) for indices in client_data_indices.values()]
-    
-    client_dataloaders = [
-        DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
-        for dataset in client_datasets
-    ]
-    
     return client_dataloaders
 
 def calculate_label_distribution(dataloader):

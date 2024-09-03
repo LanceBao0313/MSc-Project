@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
-from dataset import get_nonIID_dataloader
+from dataset import get_nonIID_dataloader, get_IID_dataloader
 from model import reset_classifier_weights
 from torchvision.datasets import CIFAR10
 import flwr as fl
@@ -22,11 +22,15 @@ import os
 from mcunet.mcunet.model_zoo import build_model
 from model import replace_fc_layer, reset_classifier_weights
 import random
+import time
+import csv
 
 random.seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
 torch.manual_seed(RANDOM_SEED)
 torch.cuda.manual_seed(RANDOM_SEED)
+
+start_time = time.time()
 
 def save_checkpoint(model, optimizer, filepath):
     state = {
@@ -39,41 +43,28 @@ def save_checkpoint(model, optimizer, filepath):
 def load_checkpoint(filepath):
     model, resolution, description = build_model(net_id="mcunet-in3", pretrained=True)
     model = replace_fc_layer(model, NUM_OF_CLASSES)
-    optimizer = torch.optim.Adam(model.classifier.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.classifier.parameters(), lr=0.001, weight_decay=1e-5)
     if os.path.isfile(filepath):
         checkpoint = torch.load(filepath)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        print(f"Loaded {filepath} model")
-        print(model.classifier[0].weight.data)
+        # print(f"Loaded {filepath} model")
+        # print(model.classifier[0].weight.data)
     else:
-        checkpoint = torch.load("./checkpoints/baseline_checkpoint_2.pth")
+        checkpoint = torch.load("./checkpoints/final_baseline.pth")
         model.load_state_dict(checkpoint['model_state_dict'])
         reset_classifier_weights(model)
-        print(model.classifier[0].weight.data)
-        print("Loaded baseline model")
+        # print(model.classifier[0].weight.data)
+        # print("Loaded baseline model")
         # optimizer = None
-    return model, optimizer
-
-def load_checkpoint_2(filepath):
-    model, resolution, description = build_model(net_id="mcunet-in3", pretrained=True)
-    model = replace_fc_layer(model, NUM_OF_CLASSES)
-    optimizer = torch.optim.Adam(model.classifier.parameters(), lr=0.001)
-
-    checkpoint = torch.load(filepath)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    print(f"Loaded {filepath} model")
-    if filepath == "./checkpoints/device_0_checkpoint.pth" or filepath == "./checkpoints/device_1_checkpoint.pth":
-        print(model.classifier[0].weight.data)
-
     return model, optimizer
 
 # Function to load datasets
 def load_datasets(partition_id: int):
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
     
-    client_dataloaders = get_nonIID_dataloader(DATA_PATH, train=True)
+    # client_dataloaders = get_nonIID_dataloader(DATA_PATH, train=True)
+    client_dataloaders = get_IID_dataloader(DATA_PATH)
     trainloader = client_dataloaders[partition_id]
 
     # Load CIFAR-10 dataset
@@ -82,14 +73,12 @@ def load_datasets(partition_id: int):
     
     return trainloader, test_loader
 
-def train(id, model, optimizer, trainloader, testloader, epochs=1, verbose=True):
+def train(id, model, optimizer, trainloader, testloader, epochs=1, verbose=False):
     # return
     # optimizer = optim.Adam(model.classifier.parameters(), lr=0.005)
     criterion = nn.CrossEntropyLoss()
     model.train()
     model.to(DEVICE)
-    print(f"Training model with {len(trainloader.dataset)} samples")
-
     for state in optimizer.state.values():
         for k, v in state.items():
             if isinstance(v, torch.Tensor):
@@ -110,21 +99,23 @@ def train(id, model, optimizer, trainloader, testloader, epochs=1, verbose=True)
             total += labels.size(0)
             correct += (torch.max(outputs.data, 1)[1] == labels).sum().item()
         epoch_loss /= len(trainloader.dataset)
-        epoch_acc = correct / total
+        epoch_acc = correct / total if total > 0 else 0
         if verbose:
             print(f"ID: {id} Epoch {epoch+1}: train loss {epoch_loss:.4f}, accuracy {epoch_acc:.4f}, num_samples: {len(trainloader.dataset)}")
-    save_checkpoint(model, optimizer, f"CFL_{id}.pth")
-    print(model.classifier[0].weight.data)
-    test_loss, test_accuracy = test(model, testloader)
-    print(f"ID: {id} Test loss: {test_loss:.4f}, accuracy: {test_accuracy:.4f}")
+    # Evaluate on the test set
+    # test_accuracy, test_f1 = test(model, testloader)
+
+    # # Calculate wall clock time
+    end_time = time.time()
+    wall_clock_time = end_time - start_time
+    print(f"{id}, {epoch_loss}, {0}, {0}, {len(trainloader.dataset)}, {wall_clock_time}")
     # return model, optimizer
 
-def test(model, testloader, print_0=False):
+def test(model, testloader):
     criterion = torch.nn.CrossEntropyLoss()
     correct, total, loss = 0, 0, 0.0
     model.eval()
-    if print_0:
-        print(model.classifier[0].weight.data)
+    
     with torch.no_grad():
         for images, labels in testloader:
             images, labels = images.to(DEVICE), labels.to(DEVICE)
@@ -134,10 +125,10 @@ def test(model, testloader, print_0=False):
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
-    loss /= len(testloader.dataset)
+    # loss /= len(testloader.dataset)
     accuracy = correct / total
-    print(f"Test loss: {loss:.4f}, accuracy: {accuracy:.4f}")
-    return loss, accuracy
+    f1_score = 2 * (accuracy * 1) / (accuracy + 1)
+    return accuracy, f1_score
 
 def set_parameters(model, parameters: List[np.ndarray]):
     params_dict = zip(model.classifier.state_dict().keys(), parameters)
@@ -168,11 +159,7 @@ class CifarClient(fl.client.NumPyClient):
 
     def evaluate(self, parameters, config):
         set_parameters(self.model, parameters)
-        if self.id == 0 or self.id == 1:
-
-            loss, accuracy = test(self.model, self.test_loader, True)
-        else:
-            loss, accuracy = test(self.model, self.test_loader, False)
+        loss, accuracy = test(self.model, self.test_loader)
         # print(f"ID: {self.id} Test loss: {loss:.4f}, accuracy: {accuracy:.4f}")
         return float(loss), len(self.test_loader.dataset), {"accuracy": float(accuracy)}
 
@@ -189,17 +176,17 @@ def client_fn(context: Context) -> Client:
 
     partition_id = context.node_config["partition-id"]
     trainloader, testloader = load_datasets(partition_id=partition_id)
-    print(f"Client {partition_id} loaded {len(trainloader.dataset)} samples, {len(testloader.dataset)} test samples")
+    # print(f"Client {partition_id} loaded {len(trainloader.dataset)} samples, {len(testloader.dataset)} test samples")
     return CifarClient(partition_id, trainloader, testloader).to_client()
 
 def server_fn(context: Context) -> ServerAppComponents:
 
     # Configure the server for 5 rounds of training
-    config = ServerConfig(num_rounds=1)
+    config = ServerConfig(num_rounds=6)
 
     strategy = FedAvg(
         fraction_fit=1.0,  # Sample 100% of available clients for training
-        fraction_evaluate=1.0,  # Sample 50% of available clients for evaluation
+        fraction_evaluate=0.5,  # Sample 50% of available clients for evaluation
         min_fit_clients=2,  # Never sample less than 10 clients for training
         min_evaluate_clients=2,  # Never sample less than 5 clients for evaluation
         min_available_clients=2,  # Wait until all 10 clients are available
@@ -211,7 +198,7 @@ def server_fn(context: Context) -> ServerAppComponents:
 # Start the federated learning process
 if __name__ == "__main__":
     # Split the training dataset into multiple clients
-    num_clients = 30
+    num_clients = 100
 
     client = ClientApp(client_fn=client_fn)
     # Create the ServerApp
@@ -221,6 +208,8 @@ if __name__ == "__main__":
     # When running on GPU, assign an entire GPU for each client
     backend_config = {"client_resources": {"num_cpus": 1, "num_gpus": 1.0}}
     ray.init(runtime_env={"working_dir": ".", "excludes": ["data"]})
+
+    start_time = time.time()
 
     run_simulation(
         server_app=server,

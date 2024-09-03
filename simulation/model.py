@@ -7,12 +7,13 @@ import numpy as np
 import math
 from collections import OrderedDict
 from typing import List
+import csv
 
 np.random.seed(RANDOM_SEED)
 torch.manual_seed(RANDOM_SEED)
 torch.cuda.manual_seed(RANDOM_SEED)
 
-def train(model, train_loader, optimizer, checkpoint_path, num_samples, emd):
+def train(round, model, train_loader, optimizer, checkpoint_path, num_samples, emd):
 	# model, optimizer = load_checkpoint(checkpoint_path)
 	criterion = nn.CrossEntropyLoss()
 	model.to(DEVICE)
@@ -42,18 +43,17 @@ def train(model, train_loader, optimizer, checkpoint_path, num_samples, emd):
 			epoch_loss += loss
 			total += labels.size(0)
 			correct += (torch.max(outputs.data, 1)[1] == labels).sum().item()
-		epoch_loss /= len(train_loader.dataset)
-		epoch_acc = correct / total
+		epoch_loss /= len(train_loader.dataset) if len(train_loader.dataset) > 0 else 0
+		epoch_acc = correct / total if total > 0 else 0
 		# print(f"Epoch {epoch+1}:loss {epoch_loss:.4f}, accuracy {epoch_acc:.4f}, num_samples: {num_samples}")
 	save_checkpoint(model, optimizer, num_samples, emd, checkpoint_path)
-	# print(model.classifier[0].weight.data)
 	return epoch_loss, epoch_acc
 
 def replace_fc_layer(model, num_classes):
 	num_ftrs = model.classifier.in_features
 	# Freeze all layers
-	for param in model.parameters():
-		param.requires_grad = False
+	# for param in model.parameters():
+	# 	param.requires_grad = False
 	classifier  = nn.Sequential(
 		nn.Linear(num_ftrs, 128),
 		nn.ReLU(),

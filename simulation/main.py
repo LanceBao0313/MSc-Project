@@ -10,6 +10,7 @@ def main():
     # dataloaders = dataset.get_federated_dataloaders(DATA_PATH, NUMBER_OF_DEVICES, 
     #                                                 NUMBER_OF_CLASSES_PER_CLIENT, BATCH_SIZE)
     dataloaders = dataset.get_nonIID_dataloader(DATA_PATH, train=True)
+    # dataloaders = dataset.get_IID_dataloader(DATA_PATH)
     network = Network(NUMBER_OF_DEVICES, number_of_clusters, dataloaders)
     mp.set_start_method('spawn')
     Visualization(network).run()
